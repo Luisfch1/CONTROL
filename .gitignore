@@ -1,8 +1,0 @@
-# OS / editor
-.DS_Store
-Thumbs.db
-.vscode/
-
-# Node / build (si luego lo agregas)
-node_modules/
-dist/
