@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CONTROL</title>
+  <meta name="theme-color" content="#111827" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">C</div>
+      <div>
+        <div class="title">CONTROL</div>
+        <div class="subtitle">Presupuesto · Avance · Financiero · Programado</div>
+      </div>
+    </div>
+
+    <div class="top-actions">
+      <button id="btnInstall" class="btn ghost" hidden>Instalar</button>
+      <button id="btnUpdate" class="btn ghost" hidden>Actualizar</button>
+      <button id="btnExport" class="btn ghost">Exportar JSON</button>
+      <label class="btn ghost">
+        Importar JSON
+        <input id="jsonImport" type="file" accept="application/json" hidden />
+      </label>
+      <button id="btnSettings" class="btn">Ajustes</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <div class="card">
+        <div class="card-title">Proyecto</div>
+        <select id="projectSelect"></select>
+        <div class="row">
+          <button id="btnNewProject" class="btn small">Nuevo</button>
+          <button id="btnDeleteProject" class="btn small danger">Borrar</button>
+        </div>
+        <div class="small muted" id="activeProjectHint">—</div>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-item active" data-tab="tab-project">1) Contrato</button>
+        <button class="nav-item" data-tab="tab-budget">2) Presupuesto</button>
+        <button class="nav-item" data-tab="tab-reports">3) Reportes</button>
+        <button class="nav-item" data-tab="tab-finance">4) Financiero</button>
+        <button class="nav-item" data-tab="tab-planned">5) Programado</button>
+      </nav>
+
+      <div class="card">
+        <div class="card-title">Estado rápido</div>
+        <div class="kv">
+          <div class="k">Valor contrato (vigente)</div>
+          <div class="v" id="kpiContractValue">—</div>
+        </div>
+        <div class="kv">
+          <div class="k">Último reporte</div>
+          <div class="v" id="kpiLastReport">—</div>
+        </div>
+        <div class="kv">
+          <div class="k">Ejecutado (último corte)</div>
+          <div class="v" id="kpiExecuted">—</div>
+        </div>
+        <div class="kv">
+          <div class="k">Financiero bruto (último corte)</div>
+          <div class="v" id="kpiFinance">—</div>
+        </div>
+      </div>
+    </aside>
+
+    <section class="content">
+      <div id="toast" class="toast hidden"></div>
+
+      <!-- TAB: PROYECTO -->
+      <section id="tab-project" class="tab active">
+        <h2>Contrato</h2>
+        <p class="muted">Define la información general del contrato (entidad, contratista, interventoría, plazos, valores). Esto alimenta los reportes.</p>
+
+        <div class="grid2">
+          <div class="card">
+            <div class="card-title">Identificación</div>
+            <label class="field">
+              <span>Nombre del contrato</span>
+              <input id="p_name" type="text" placeholder="Ej: Construcción ..."/>
+            </label>
+            <label class="field">
+              <span>Moneda</span>
+              <select id="p_currency">
+                <option value="COP">COP</option>
+                <option value="USD">USD</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Fecha inicio</span>
+              <input id="p_start" type="date"/>
+            </label>
+            <label class="field">
+              <span>Fecha fin inicial</span>
+              <input id="p_end" type="date"/>
+            </label>
+            <div class="row">
+              <button id="btnSaveProject" class="btn">Guardar</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Partes</div>
+            <div class="subgrid">
+              <div class="pill">Entidad</div>
+              <label class="field"><span>Nombre</span><input id="p_owner_name" type="text"/></label>
+              <label class="field"><span>NIT</span><input id="p_owner_nit" type="text"/></label>
+              <label class="field"><span>Representante</span><input id="p_owner_rep" type="text"/></label>
+
+              <div class="pill">Contratista</div>
+              <label class="field"><span>Nombre</span><input id="p_contractor_name" type="text"/></label>
+              <label class="field"><span>NIT</span><input id="p_contractor_nit" type="text"/></label>
+              <label class="field"><span>Representante</span><input id="p_contractor_rep" type="text"/></label>
+
+              <div class="pill">Interventoría</div>
+              <label class="field"><span>Nombre</span><input id="p_inter_name" type="text"/></label>
+              <label class="field"><span>NIT</span><input id="p_inter_nit" type="text"/></label>
+              <label class="field"><span>Representante</span><input id="p_inter_rep" type="text"/></label>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Suspensiones</div>
+          <div class="row">
+            <button id="btnAddSuspension" class="btn small">Agregar suspensión</button>
+            <div class="small muted">Afectan el "tiempo contractual efectivo" y el corrimiento del programado (si lo activas).</div>
+          </div>
+          <div id="suspensionsTable" class="tablewrap"></div>
+        </div>
+      </section>
+
+      <!-- TAB: PRESUPUESTO -->
+      <section id="tab-budget" class="tab">
+        <h2>Presupuesto</h2>
+        <p class="muted">Carga el presupuesto contractual mínimo (Ítem, Descripción, Unidad, Cantidad, VU). Puedes agregar modificaciones (MOD 1, MOD 2...).</p>
+
+        <div class="card">
+          <div class="row">
+            <label class="btn">
+              Cargar Excel
+              <input id="budgetFile" type="file" accept=".xlsx,.xls,.xlsm" hidden />
+            </label>
+
+            <select id="budgetSheetSelect" class="select" disabled></select>
+            <button id="btnParseBudget" class="btn ghost" disabled>Leer hoja</button>
+
+            <button id="btnAddRevision" class="btn ghost" disabled>Agregar modificación</button>
+            <button id="btnNormalizeQty" class="btn ghost" disabled>Normalizar cantidades a 2 decimales</button>
+
+            <div class="spacer"></div>
+            <label class="toggle">
+              <input id="toggleShowBase" type="checkbox" checked />
+              <span>Mostrar contrato base</span>
+            </label>
+            <div id="revisionToggles"></div>
+          </div>
+
+          <div id="budgetWarnings" class="warnings"></div>
+          <div id="budgetTable" class="tablewrap"></div>
+        </div>
+      </section>
+
+      <!-- TAB: REPORTES -->
+      <section id="tab-reports" class="tab">
+        <h2>Reportes de avance</h2>
+        <p class="muted">Los reportes se ingresan por <b>acumulado</b>. El periodo se calcula automáticamente contra el reporte anterior.</p>
+
+        <div class="card">
+          <div class="row">
+            <select id="reportSelect" class="select"></select>
+            <button id="btnNewReport" class="btn">Nuevo reporte</button>
+            <button id="btnDeleteReport" class="btn danger">Borrar reporte</button>
+            <div class="spacer"></div>
+            <button id="btnSaveReport" class="btn ghost">Guardar cantidades</button>
+          </div>
+
+          <div id="reportMeta" class="grid2"></div>
+
+          <div id="reportTable" class="tablewrap"></div>
+
+          <div class="grid2">
+            <div class="card soft">
+              <div class="card-title">Totales (último cálculo)</div>
+              <div class="kv"><div class="k">Ejecutado acumulado</div><div class="v" id="repExecAccum">—</div></div>
+              <div class="kv"><div class="k">Ejecutado del periodo</div><div class="v" id="repExecPeriod">—</div></div>
+              <div class="kv"><div class="k">% avance ejecutado (económico)</div><div class="v" id="repExecPct">—</div></div>
+            </div>
+            <div class="card soft">
+              <div class="card-title">Gráfico (Programado vs Ejecutado)</div>
+              <div id="chartExec" class="chart"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB: FINANCIERO -->
+      <section id="tab-finance" class="tab">
+        <h2>Financiero (bruto)</h2>
+        <p class="muted">Registra anticipo y pagos realizados. El avance financiero bruto se calcula como pagos acumulados / valor del contrato vigente.</p>
+
+        <div class="grid2">
+          <div class="card">
+            <div class="row">
+              <button id="btnAddFinanceEvent" class="btn">Agregar evento</button>
+              <button id="btnDeleteFinanceEvent" class="btn danger">Borrar evento</button>
+            </div>
+            <div id="financeTable" class="tablewrap"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Gráfico (Financiero vs Ejecutado)</div>
+            <div id="chartFinance" class="chart"></div>
+
+            <div class="kv"><div class="k">Financiero bruto a corte</div><div class="v" id="finPct">—</div></div>
+            <div class="kv"><div class="k">Pagos brutos acumulados</div><div class="v" id="finAccum">—</div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB: PROGRAMADO -->
+      <section id="tab-planned" class="tab">
+        <h2>Programado</h2>
+        <p class="muted">Importa la curva programada (desde Excel exportado de Project o un Excel propio). Se usa para comparar contra ejecutado.</p>
+
+        <div class="card">
+          <div class="row">
+            <label class="btn">
+              Importar programado (Excel)
+              <input id="plannedFile" type="file" accept=".xlsx,.xls,.xlsm" hidden />
+            </label>
+            <select id="plannedSheetSelect" class="select" disabled></select>
+            <button id="btnParsePlanned" class="btn ghost" disabled>Leer hoja</button>
+            <div class="spacer"></div>
+            <div class="small muted">MVP: si tu hoja tiene columnas de fecha y costo (o fechas como columnas), CONTROL arma una curva acumulada.</div>
+          </div>
+          <div id="plannedWarnings" class="warnings"></div>
+          <div id="plannedTable" class="tablewrap"></div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <!-- Settings modal -->
+  <dialog id="settingsDialog">
+    <form method="dialog" class="modal">
+      <div class="modal-head">
+        <div>
+          <div class="modal-title">Ajustes</div>
+          <div class="muted small">Por defecto: valores a 0 decimales (redondeo) y cantidades a 2 decimales.</div>
+        </div>
+        <button class="btn ghost small" value="cancel">Cerrar</button>
+      </div>
+
+      <div class="modal-body">
+        <label class="field">
+          <span>Decimales de dinero (redondeo de valores)</span>
+          <select id="setMoneyDecimals">
+            <option value="0">0 (por defecto)</option>
+            <option value="2">2</option>
+            <option value="-3">A miles (−3)</option>
+          </select>
+          <div class="small muted">“A miles” redondea al 1.000 más cercano (útil para informes rápidos).</div>
+        </label>
+
+        <label class="field">
+          <span>Decimales de cantidades (visualización / edición)</span>
+          <select id="setQtyDecimals">
+            <option value="2">2 (recomendado)</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+          </select>
+          <div class="small muted">CONTROL avisará (resaltado) si una cantidad del presupuesto trae más decimales que esta regla.</div>
+        </label>
+
+        <label class="toggle">
+          <input id="setHighlightExtraQty" type="checkbox" checked />
+          <span>Resaltar cantidades con más decimales de lo permitido</span>
+        </label>
+
+        <label class="toggle">
+          <input id="setShiftPlannedBySuspensions" type="checkbox" checked />
+          <span>Desplazar el programado por suspensiones (modo entidad/interventoría)</span>
+        </label>
+      </div>
+
+      <div class="modal-foot">
+        <button id="btnSaveSettings" class="btn" value="ok">Guardar ajustes</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="xlsx.full.min.js"></script>
+  <script type="module" src="app.js"></script>
+  <!-- Service worker se registra desde app.js para poder manejar "Actualizar" -->
+</body>
+</html>
