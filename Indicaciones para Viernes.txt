@@ -1,0 +1,53 @@
+=====================================================================
+INDICACIONES TÉCNICAS PARA INTEGRACIÓN LOGI <-> CONTROL
+=====================================================================
+Fecha: 1 de Mayo, 2026
+Contexto: Sincronización de Evidencias en la Nube (BYOC - Supabase)
+
+1. ESTADO ACTUAL EN CONTROL:
+---------------------------------------------------------------------
+- Sistema de sincronización activado.
+- Dashboard y Galería vinculados a Supabase en tiempo real.
+- El Project ID (ej: td21rwdmom62tlg) es la llave de unión.
+- Librería @supabase/supabase-js instalada y configurada.
+
+2. CONFIGURACIÓN DE LA NUBE (SUPABASE):
+---------------------------------------------------------------------
+Proyecto: luis.cuellarh@outlook.com's Project
+URL: https://nxhohotisbtgmrxshbdh.supabase.co
+Tabla: logi_evidences
+
+Estructura de la Tabla (SQL ejecutado):
+- id (uuid, auto-gen)
+- project_id (text) -> DEBE coincidir con el ID de CONTROL.
+- fecha (date)
+- item_code (text) -> Item del presupuesto (ej: 2.1.8).
+- description (text) -> Descripción capturada en Logi.
+- image_url (text) -> Link público de Supabase Storage.
+- sync_id (text, unique) -> ID único de la foto para evitar duplicados.
+
+3. TAREAS PENDIENTES EN PROYECTO LOGI:
+---------------------------------------------------------------------
+A. Implementar Cliente Supabase: Configurar conexión con URL y API Key.
+B. Proceso de Carga (Upload):
+   - Crear función para subir archivos .jpg al bucket de Storage.
+   - Generar URL pública para cada imagen subida.
+C. Inserción de Metadata:
+   - Al capturar o sincronizar, enviar fila a 'logi_evidences'.
+   - Asegurar que el campo 'project_id' sea configurable por el usuario
+     (debe poder pegar el ID de CONTROL en Logi).
+D. Política de Inmutabilidad:
+   - Logi solo tiene permiso de INSERT y SELECT.
+   - El borrado de fotos en Logi NO debe afectar la tabla de Supabase 
+     una vez sincronizada (Regla de oro: Add-only).
+
+4. NOTAS TÉCNICAS PARA "ANTIGRAVITY" (IA):
+---------------------------------------------------------------------
+- Se movieron las interfaces a src/types/projectTypes.ts para evitar 
+  dependencias circulares.
+- Se instaló @supabase/supabase-js.
+- El servicio en CONTROL es src/services/SyncService.ts.
+
+=====================================================================
+DOCUMENTO DE TRANSFERENCIA FINALIZADO - LISTO PARA TRABAJAR EN LOGI
+=====================================================================

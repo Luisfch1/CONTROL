@@ -1,0 +1,824 @@
+export type Role = 'system' | 'user' | 'assistant';
+
+export interface MessageContent {
+  type: 'text' | 'image_url';
+  text?: string;
+  image_url?: {
+    url: string; // URL o Base64 o Blob URL
+  };
+}
+
+export interface ChatMessage {
+  role: Role;
+  content: string | MessageContent[];
+  isReport?: boolean;
+}
+
+export interface AIConfig {
+  endpoint: string;
+  maxContextMessages: number;
+}
+
+// Validar si una API Key es real y no un texto de marcador de posición (placeholder)
+const isValidApiKey = (key?: string | null): boolean => {
+  if (!key) return false;
+  const k = key.trim();
+  return (
+    k.length > 10 && 
+    k !== 'TU_API_KEY_DE_GEMINI_AQUI' && 
+    k !== 'YOUR_GEMINI_API_KEY'
+  );
+};
+
+// Obtener la API Key validando la prioridad: opción pasada -> localStorage -> Variable de entorno
+const getApiKey = (optionsApiKey?: string): string => {
+  // 1. Clave pasada en las opciones (nivel de proyecto activo)
+  if (isValidApiKey(optionsApiKey)) {
+    return optionsApiKey!.trim();
+  }
+
+  // 2. Clave guardada localmente por el usuario en la interfaz (localStorage)
+  const localKey = localStorage.getItem('gemini-api-key');
+  if (isValidApiKey(localKey)) {
+    return localKey!.trim();
+  }
+
+  // 3. Variable de entorno Vite (último recurso)
+  const envKey = import.meta.env.VITE_GEMINI_API_KEY;
+  if (isValidApiKey(envKey)) {
+    return envKey.trim();
+  }
+
+  return '';
+};
+
+const DEFAULT_CONFIG: AIConfig = {
+  endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent',
+  maxContextMessages: 20, // Aumentado gracias a la ventana de contexto de Gemini
+};
+
+/**
+ * Traduce el historial de mensajes de la aplicación al formato oficial que requiere Gemini,
+ * procesando asíncronamente imágenes en base64 o Blob URLs locales.
+ */
+const mapMessagesToGemini = async (messages: ChatMessage[]): Promise<any[]> => {
+  const contents: any[] = [];
+
+  for (const msg of messages) {
+    // El system prompt se pasa por fuera en systemInstruction de Gemini
+    if (msg.role === 'system') continue;
+
+    const role = msg.role === 'assistant' ? 'model' : 'user';
+    const parts: any[] = [];
+
+    if (typeof msg.content === 'string') {
+      parts.push({ text: msg.content });
+    } else if (Array.isArray(msg.content)) {
+      for (const part of msg.content) {
+        if (part.type === 'text') {
+          parts.push({ text: part.text || '' });
+        } else if (part.type === 'image_url' && part.image_url?.url) {
+          const url = part.image_url.url;
+          if (url.startsWith('data:')) {
+            const mimeType = url.substring(url.indexOf(':') + 1, url.indexOf(';'));
+            const data = url.substring(url.indexOf(',') + 1);
+            parts.push({
+              inlineData: {
+                mimeType,
+                data
+              }
+            });
+          } else {
+            // Es un Blob URL o URL remota, lo descargamos para convertirlo a inlineData
+            try {
+              const res = await fetch(url);
+              const blob = await res.blob();
+              const base64Data = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                  const result = reader.result as string;
+                  resolve(result.substring(result.indexOf(',') + 1));
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+              });
+              parts.push({
+                inlineData: {
+                  mimeType: blob.type || 'image/jpeg',
+                  data: base64Data
+                }
+              });
+            } catch (err) {
+              console.error("Error al procesar la imagen para Gemini:", url, err);
+            }
+          }
+        }
+      }
+    }
+
+    if (parts.length > 0) {
+      contents.push({ role, parts });
+    }
+  }
+
+  return contents;
+};
+
+export interface ApiAuditLog {
+  id: string;
+  timestamp: string;
+  model: string;
+  url: string;
+  status: number | string;
+  durationMs: number;
+  systemPrompt: string;
+  messages: ChatMessage[];
+  response?: any;
+  error?: string;
+}
+
+export const apiAuditLogs: ApiAuditLog[] = [];
+
+const addAuditLog = (log: Omit<ApiAuditLog, 'id' | 'timestamp'>) => {
+  const newLog: ApiAuditLog = {
+    ...log,
+    id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    timestamp: new Date().toLocaleTimeString()
+  };
+  apiAuditLogs.unshift(newLog);
+  if (apiAuditLogs.length > 50) {
+    apiAuditLogs.pop();
+  }
+  window.dispatchEvent(new CustomEvent('control-api-audit-update'));
+
+  // Escribir logs de API localmente para depuración en el espacio de trabajo
+  if ((window as any).electronAPI && typeof (window as any).electronAPI.writeFile === 'function') {
+    (window as any).electronAPI.writeFile('c:/Users/ingen/Documents/APPS/Antigravity/Control/api_logs.json', JSON.stringify(apiAuditLogs, null, 2))
+      .catch((err: any) => console.error("Error writing api_logs.json:", err));
+  }
+};
+
+interface ChatOptions {
+  tools?: any[];
+  toolConfig?: any;
+  apiKey?: string;
+}
+
+export const chatWithAgent = async (
+  messages: ChatMessage[],
+  systemPrompt: string,
+  config: AIConfig = DEFAULT_CONFIG,
+  options?: ChatOptions
+): Promise<any> => {
+  const apiKey = getApiKey(options?.apiKey);
+  if (!apiKey) {
+    throw new Error(
+      "🔑 Falta configurar la API Key de Google AI Studio (Gemini).\n\n" +
+      "Por favor realiza una de las siguientes opciones:\n" +
+      "1. Haz clic en el botón 'Configuración' (icono de engranaje en la barra lateral izquierda) y guarda tu API Key en la sección 'Configuración Agente IA'.\n" +
+      "2. Crea un archivo `.env` en la raíz del proyecto y agrega `VITE_GEMINI_API_KEY=tu_api_key`.\n" +
+      "3. O ejecuta en la consola de desarrollador: `localStorage.setItem('gemini-api-key', 'tu_api_key')`."
+    );
+  }
+
+  // Filtrar los últimos mensajes según la capacidad de contexto definida
+  const userAndAssistantMessages = messages.filter(m => m.role !== 'system');
+  const recentMessages = userAndAssistantMessages.slice(-config.maxContextMessages);
+
+  // Mapear los mensajes al formato de Gemini
+  const contents = await mapMessagesToGemini(recentMessages);
+
+  interface Candidate {
+    name: string;
+    url: string;
+    isV1Fallback: boolean;
+  }
+
+  const candidates: Candidate[] = [
+    {
+      name: 'v1beta / gemini-3.1-flash-lite',
+      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`,
+      isV1Fallback: false
+    },
+    {
+      name: 'v1beta / gemini-2.5-flash-lite',
+      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`,
+      isV1Fallback: false
+    },
+    {
+      name: 'v1beta / gemini-2.5-flash',
+      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+      isV1Fallback: false
+    },
+    {
+      name: 'v1beta / gemini-3.5-flash',
+      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`,
+      isV1Fallback: false
+    },
+    {
+      name: 'v1beta / gemini-2.0-flash',
+      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+      isV1Fallback: false
+    },
+    {
+      name: 'v1 / gemini-3.1-flash-lite',
+      url: `https://generativelanguage.googleapis.com/v1/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`,
+      isV1Fallback: true
+    },
+    {
+      name: 'v1 / gemini-2.5-flash-lite',
+      url: `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`,
+      isV1Fallback: true
+    }
+  ];
+
+  // Reordenar candidatos según el último exitoso almacenado
+  try {
+    const lastSuccessful = localStorage.getItem('gemini-last-successful-candidate');
+    if (lastSuccessful) {
+      const idx = candidates.findIndex(c => c.name === lastSuccessful);
+      if (idx > 0) {
+        const [matched] = candidates.splice(idx, 1);
+        candidates.unshift(matched);
+        console.log(`[AI Service] Reordenado: Se probará primero el candidato exitoso anterior: '${lastSuccessful}'`);
+      }
+    }
+  } catch (e) {
+    console.warn('[AI Service] No se pudo leer localStorage para el candidato exitoso', e);
+  }
+
+  let lastError: any = null;
+
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i];
+    const startTime = Date.now();
+    console.log(`[AI Service] Intentando conexión con candidato: ${candidate.name}...`);
+
+    // Clonar contents para evitar mutar el original en múltiples intentos
+    let requestContents = JSON.parse(JSON.stringify(contents));
+
+    const requestBody: any = {
+      contents: requestContents,
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 2048,
+      }
+    };
+
+    if (candidate.isV1Fallback) {
+      // En la versión v1, el sistema de Google lanza error al enviar systemInstruction o tools en el cuerpo.
+      // Simulamos la instrucción del sistema inyectándola directamente en el mensaje de usuario.
+      if (systemPrompt && requestContents.length > 0) {
+        // Encontrar el primer mensaje de usuario o agregar uno
+        const firstUserIndex = requestContents.findIndex((m: any) => m.role === 'user');
+        if (firstUserIndex !== -1) {
+          const parts = requestContents[firstUserIndex].parts;
+          if (parts && parts.length > 0 && typeof parts[0].text === 'string') {
+            parts[0].text = `[INSTRUCCIÓN DE SISTEMA: ${systemPrompt}]\n\n${parts[0].text}`;
+          }
+        }
+      }
+    } else {
+      // Formato v1beta completo con systemInstruction y tools
+      if (systemPrompt) {
+        requestBody.systemInstruction = {
+          parts: [{ text: systemPrompt }]
+        };
+      }
+      if (options?.tools) {
+        requestBody.tools = options.tools;
+        if (options.toolConfig) {
+          requestBody.toolConfig = options.toolConfig;
+        }
+      }
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+    let response: Response;
+    let fetchDurationMs = 0;
+
+    try {
+      response = await fetch(candidate.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        signal: controller.signal,
+        body: JSON.stringify(requestBody)
+      });
+      clearTimeout(timeoutId);
+      fetchDurationMs = Date.now() - startTime;
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      console.error(`[AI Service] Falló fetch para candidato ${candidate.name}:`, error);
+
+      const durationMs = Date.now() - startTime;
+      const errorText = error.name === 'AbortError'
+        ? "⏱️ Tiempo de espera agotado. La API de Gemini tardó más de 60 segundos en responder."
+        : error.message || String(error);
+
+      // Registrar error de red una sola vez
+      addAuditLog({
+        model: candidate.name,
+        url: candidate.url,
+        status: error.name === 'AbortError' ? 'Timeout' : 'Error de Conexión',
+        durationMs,
+        systemPrompt,
+        messages,
+        error: errorText
+      });
+
+      if (error.name === 'AbortError') {
+        lastError = new Error("⏱️ Tiempo de espera agotado. La API de Gemini tardó más de 60 segundos en responder.");
+      } else {
+        lastError = error;
+      }
+
+      // Probar siguiente candidato si está disponible
+      continue;
+    }
+
+    const durationMs = fetchDurationMs;
+
+    // Controlar errores de respuesta HTTP
+    if (!response.ok) {
+      let errorMessage = `Error HTTP ${response.status}: ${response.statusText}`;
+      try {
+        const errorData = await response.json();
+        if (errorData.error?.message) {
+          errorMessage = errorData.error.message;
+        }
+      } catch (_) {}
+
+      // Registrar error HTTP una sola vez con su estado real
+      addAuditLog({
+        model: candidate.name,
+        url: candidate.url,
+        status: response.status,
+        durationMs,
+        systemPrompt,
+        messages,
+        error: errorMessage
+      });
+
+      // Comprobar si es un error de modelo no encontrado o de versión no soportada
+      const isModelNotFoundError =
+        response.status === 404 ||
+        errorMessage.toLowerCase().includes('not found') ||
+        errorMessage.toLowerCase().includes('not supported') ||
+        errorMessage.toLowerCase().includes('modelservice');
+
+      if (isModelNotFoundError && i < candidates.length - 1) {
+        console.warn(`[AI Service] Modelo no encontrado en ${candidate.name}. Error: ${errorMessage}. Probando siguiente fallback...`);
+        lastError = new Error(`Error en Google AI Studio (${candidate.name}): ${errorMessage}`);
+        continue; // Probar el siguiente candidato
+      }
+
+      // Errores de cuota (Rate Limit / Quota Exceeded): probamos el siguiente candidato por si es específico de este modelo (ej: límite 0 en 2.0-flash)
+      if (response.status === 429) {
+        console.warn(`[AI Service] Modelo ${candidate.name} retornó 429 (Cuota/Límite excedido). Probando siguiente candidato...`);
+        lastError = new Error(`⚠️ Cuota de API excedida (Rate Limit): ${errorMessage}.`);
+        if (i < candidates.length - 1) {
+          continue;
+        }
+        throw lastError;
+      } else if (response.status === 400 && errorMessage.toLowerCase().includes('api key')) {
+        throw new Error(`🔑 API Key Inválida: La clave de API configurada no es correcta o expiró. Si acabas de generar una nueva clave API en Google AI Studio, ten en cuenta que Google suele tardar entre 1 y 2 minutos en replicar y activar la clave globalmente. Por favor, espera un momento y vuelve a intentar.`);
+      }
+
+      lastError = new Error(`Error en Google AI Studio (${candidate.name}): ${errorMessage}`);
+      
+      if (i < candidates.length - 1) {
+        continue;
+      }
+      throw lastError;
+    }
+
+    // Petición exitosa: procesar y validar respuesta
+    try {
+      const data = await response.json();
+
+      const candidateResponse = data.candidates?.[0];
+      if (!candidateResponse) {
+        const errStr = "No se recibió respuesta o fue bloqueada por filtros de seguridad de Google.";
+        addAuditLog({
+          model: candidate.name,
+          url: candidate.url,
+          status: response.status,
+          durationMs,
+          systemPrompt,
+          messages,
+          error: errStr
+        });
+        throw new Error(errStr);
+      }
+
+      const part = candidateResponse.content?.parts?.[0];
+      if (!part) {
+        const errStr = "La respuesta recibida no contiene datos legibles.";
+        addAuditLog({
+          model: candidate.name,
+          url: candidate.url,
+          status: response.status,
+          durationMs,
+          systemPrompt,
+          messages,
+          error: errStr
+        });
+        throw new Error(errStr);
+      }
+
+      // Guardar el candidato exitoso en localStorage
+      try {
+        localStorage.setItem('gemini-last-successful-candidate', candidate.name);
+      } catch (e) {
+        console.warn('[AI Service] No se pudo guardar el candidato exitoso en localStorage', e);
+      }
+
+      const resultPayload = part.functionCall || part.text || '';
+      addAuditLog({
+        model: candidate.name,
+        url: candidate.url,
+        status: response.status,
+        durationMs,
+        systemPrompt,
+        messages,
+        response: resultPayload
+      });
+
+      if (part.functionCall) {
+        return part.functionCall;
+      }
+
+      return part.text || '';
+    } catch (parseError: any) {
+      console.error(`[AI Service] Error parseando respuesta exitosa de ${candidate.name}:`, parseError);
+      lastError = parseError;
+
+      addAuditLog({
+        model: candidate.name,
+        url: candidate.url,
+        status: 'Error de Lectura',
+        durationMs,
+        systemPrompt,
+        messages,
+        error: parseError.message || String(parseError)
+      });
+
+      if (i < candidates.length - 1) {
+        continue;
+      }
+      throw lastError;
+    }
+  }
+
+  throw lastError || new Error("Error desconocido al comunicarse con el Agente de Google AI Studio.");
+};
+
+export const transcribeAudio = async (
+  base64Data: string,
+  mimeType: string,
+  optionsApiKey?: string
+): Promise<string> => {
+  const apiKey = getApiKey(optionsApiKey);
+  if (!apiKey) {
+    throw new Error(
+      "🔑 Falta configurar la API Key de Google AI Studio (Gemini).\n\n" +
+      "Por favor realiza una de las siguientes opciones:\n" +
+      "1. Haz clic en el botón 'Configuración' (icono de engranaje en la barra lateral izquierda) y guarda tu API Key en la sección 'Configuración Agente IA'.\n" +
+      "2. Crea un archivo `.env` en la raíz del proyecto y agrega `VITE_GEMINI_API_KEY=tu_api_key`.\n" +
+      "3. O ejecuta en la consola de desarrollador: `localStorage.setItem('gemini-api-key', 'tu_api_key')`."
+    );
+  }
+
+  interface Candidate {
+    name: string;
+    url: string;
+  }
+
+  const candidates: Candidate[] = [
+    {
+      name: 'v1beta / gemini-3.1-flash-lite',
+      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`,
+    },
+    {
+      name: 'v1beta / gemini-2.5-flash-lite',
+      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`,
+    },
+    {
+      name: 'v1beta / gemini-2.5-flash',
+      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+    },
+    {
+      name: 'v1beta / gemini-2.0-flash',
+      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+    }
+  ];
+
+  // Reordenar candidatos según el último exitoso almacenado
+  try {
+    const lastSuccessful = localStorage.getItem('gemini-last-successful-candidate');
+    if (lastSuccessful) {
+      const idx = candidates.findIndex(c => c.name === lastSuccessful);
+      if (idx > 0) {
+        const [matched] = candidates.splice(idx, 1);
+        candidates.unshift(matched);
+      }
+    }
+  } catch (e) {
+    console.warn('[Audio Service] No se pudo leer localStorage para el candidato exitoso', e);
+  }
+
+  let lastError: any = null;
+
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i];
+    const startTime = Date.now();
+    console.log(`[Audio Service] Intentando transcripción con candidato: ${candidate.name}...`);
+
+    const requestBody = {
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              inlineData: {
+                mimeType,
+                data: base64Data
+              }
+            },
+            {
+              text: "Transcribe este audio en español. Devuelve únicamente la transcripción literal de lo hablado, sin comentarios, sin formato extra y sin añadir explicaciones adicionales. Si no hay audio legible o está en silencio, responde con un espacio en blanco."
+            }
+          ]
+        }
+      ],
+      generationConfig: {
+        temperature: 0.0,
+        maxOutputTokens: 1024,
+      }
+    };
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    try {
+      const response = await fetch(candidate.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        signal: controller.signal,
+        body: JSON.stringify(requestBody)
+      });
+      clearTimeout(timeoutId);
+
+      const durationMs = Date.now() - startTime;
+
+      if (!response.ok) {
+        let errorMessage = `Error HTTP ${response.status}: ${response.statusText}`;
+        try {
+          const errorData = await response.json();
+          if (errorData.error?.message) {
+            errorMessage = errorData.error.message;
+          }
+        } catch (_) {}
+
+        // Registrar error en log de auditoría
+        addAuditLog({
+          model: `Transcription / ${candidate.name}`,
+          url: candidate.url,
+          status: response.status,
+          durationMs,
+          systemPrompt: "Audio Transcription Prompt",
+          messages: [{ role: 'user', content: 'Audio dictado' } as ChatMessage],
+          error: errorMessage
+        });
+
+        const isModelNotFoundError =
+          response.status === 404 ||
+          errorMessage.toLowerCase().includes('not found') ||
+          errorMessage.toLowerCase().includes('not supported') ||
+          errorMessage.toLowerCase().includes('modelservice');
+
+        if (isModelNotFoundError && i < candidates.length - 1) {
+          console.warn(`[Audio Service] Modelo no encontrado en ${candidate.name}. Probando siguiente fallback...`);
+          lastError = new Error(`Error en Google AI Studio (${candidate.name}): ${errorMessage}`);
+          continue;
+        }
+
+        lastError = new Error(`Error en Google AI Studio (${candidate.name}): ${errorMessage}`);
+        if (i < candidates.length - 1) {
+          continue;
+        }
+        throw lastError;
+      }
+
+      const data = await response.json();
+      const part = data.candidates?.[0]?.content?.parts?.[0];
+      if (!part || !part.text) {
+        throw new Error("La respuesta de transcripción no contiene texto.");
+      }
+
+      // Guardar el candidato exitoso en localStorage
+      try {
+        localStorage.setItem('gemini-last-successful-candidate', candidate.name);
+      } catch (e) {}
+
+      const transcriptionText = part.text.trim();
+
+      addAuditLog({
+        model: `Transcription / ${candidate.name}`,
+        url: candidate.url,
+        status: response.status,
+        durationMs,
+        systemPrompt: "Audio Transcription Prompt",
+        messages: [{ role: 'user', content: 'Audio dictado' } as ChatMessage],
+        response: transcriptionText
+      });
+
+      return transcriptionText;
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      console.error(`[Audio Service] Falló transcripción para candidato ${candidate.name}:`, error);
+
+      const durationMs = Date.now() - startTime;
+      const errorText = error.name === 'AbortError'
+        ? "⏱️ Tiempo de espera agotado. La API de Gemini tardó más de 30 segundos en transcribir."
+        : error.message || String(error);
+
+      addAuditLog({
+        model: `Transcription / ${candidate.name}`,
+        url: candidate.url,
+        status: error.name === 'AbortError' ? 'Timeout' : 'Error de Conexión',
+        durationMs,
+        systemPrompt: "Audio Transcription Prompt",
+        messages: [{ role: 'user', content: 'Audio dictado' } as ChatMessage],
+        error: errorText
+      });
+
+      lastError = error;
+      if (i < candidates.length - 1) {
+        continue;
+      }
+    }
+  }
+
+  throw lastError || new Error("Error desconocido al transcribir el audio.");
+};
+
+export const analyzeCorrespondencePdf = async (
+  base64Data: string,
+  fileName: string,
+  optionsApiKey?: string
+): Promise<{
+  date?: string;
+  sender?: string;
+  receiver?: string;
+  subject?: string;
+  summary?: string;
+  status: 'pending' | 'answered' | 'no_action_needed';
+  followUpDeadline?: string;
+}> => {
+  const apiKey = getApiKey(optionsApiKey);
+  if (!apiKey) {
+    throw new Error("🔑 Falta configurar la API Key de Gemini.");
+  }
+
+  interface Candidate {
+    name: string;
+    url: string;
+  }
+
+  const candidates: Candidate[] = [
+    {
+      name: 'v1beta / gemini-3.1-flash-lite',
+      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`,
+    },
+    {
+      name: 'v1beta / gemini-2.5-flash-lite',
+      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`,
+    },
+    {
+      name: 'v1beta / gemini-2.5-flash',
+      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+    }
+  ];
+
+  // Reordenar candidatos según el último exitoso almacenado
+  try {
+    const lastSuccessful = localStorage.getItem('gemini-last-successful-candidate');
+    if (lastSuccessful) {
+      const idx = candidates.findIndex(c => c.name === lastSuccessful);
+      if (idx > 0) {
+        const [matched] = candidates.splice(idx, 1);
+        candidates.unshift(matched);
+      }
+    }
+  } catch (e) {}
+
+  let lastError: any = null;
+
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i];
+    const startTime = Date.now();
+    console.log(`[PDF Analysis] Intentando análisis con candidato: ${candidate.name}...`);
+
+    try {
+      const requestBody = {
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                inlineData: {
+                  mimeType: 'application/pdf',
+                  data: base64Data
+                }
+              },
+              {
+                text: `Analiza este documento PDF de correspondencia (oficio/comunicación) adjunto.
+Extrae la información y responde ÚNICA y EXCLUSIVAMENTE con un objeto JSON válido con las siguientes propiedades:
+- date: La fecha oficial de emisión del documento en formato YYYY-MM-DD (si no se encuentra, la fecha actual en la que se sube).
+- sender: El nombre del remitente (quién firma o envía el oficio).
+- receiver: El nombre del destinatario (a quién va dirigido).
+- subject: El asunto del oficio de forma resumida (ej. "Solicitud de ampliación de plazo").
+- summary: Un resumen técnico muy concreto del contenido (máximo 2 frases).
+- status: El valor debe ser "pending" (si es un oficio que requiere respuesta o acción pendiente de seguimiento) o "no_action_needed" (si es informativo o ya está resuelto).
+- followUpDeadline: Fecha límite estimada para hacerle seguimiento en formato YYYY-MM-DD (ej. de 7 a 15 días hábiles después de la fecha del documento).
+
+Ejemplo de salida JSON:
+{
+  "date": "2026-05-25",
+  "sender": "Consorcio Vial 2026",
+  "receiver": "LCH Ingeniería S.A.S.",
+  "subject": "Presentación de informe mensual de interventoría",
+  "summary": "Se hace entrega del informe correspondiente al mes de abril de 2026 para revisión y aprobación.",
+  "status": "pending",
+  "followUpDeadline": "2026-06-01"
+}
+
+No agregues preámbulos, no agregues bloques de código de markdown como \`\`\`json, solo devuelve el objeto JSON directamente.`
+              }
+            ]
+          }
+        ],
+        generationConfig: {
+          temperature: 0.1,
+          responseMimeType: "application/json",
+          maxOutputTokens: 2048
+        }
+      };
+
+      const response = await fetch(candidate.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      if (!response.ok) {
+        let errMsg = `HTTP ${response.status}`;
+        try {
+          const errJson = await response.json();
+          if (errJson.error?.message) errMsg = errJson.error.message;
+        } catch (_) {}
+        throw new Error(errMsg);
+      }
+
+      const data = await response.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text !== undefined) {
+        try {
+          let cleanText = text.trim();
+          if (cleanText.startsWith('```')) {
+            cleanText = cleanText.replace(/^```json\s*/, '').replace(/```$/, '').trim();
+          }
+          const parsed = JSON.parse(cleanText);
+          return {
+            date: parsed.date || new Date().toISOString().split('T')[0],
+            sender: parsed.sender || 'Desconocido',
+            receiver: parsed.receiver || 'Desconocido',
+            subject: parsed.subject || 'Sin Asunto',
+            summary: parsed.summary || 'Sin Resumen',
+            status: parsed.status === 'pending' || parsed.status === 'answered' || parsed.status === 'no_action_needed' ? parsed.status : 'pending',
+            followUpDeadline: parsed.followUpDeadline || undefined
+          };
+        } catch (jsonErr) {
+          console.error("Failed to parse JSON response from Gemini for PDF:", text, jsonErr);
+          throw new Error("La respuesta del modelo no tiene formato JSON válido.");
+        }
+      }
+      throw new Error("No se obtuvo respuesta del modelo.");
+    } catch (err) {
+      console.error(`[PDF Analysis] Failed with ${candidate.name}:`, err);
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error("Error analizando el PDF.");
+};
+
