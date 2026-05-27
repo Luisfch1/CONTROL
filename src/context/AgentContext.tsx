@@ -131,6 +131,7 @@ export const AgentProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const sendingRef = React.useRef(false);
   const systemPromptRef = React.useRef<string>('');
   const lastProjectIdRef = React.useRef<string>('');
+  const lastProjectStateRef = React.useRef<string>('');
 
   // Temporizador para cuenta regresiva del rate limit (429)
   React.useEffect(() => {
@@ -149,6 +150,7 @@ export const AgentProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const clearPromptCache = React.useCallback(() => {
     systemPromptRef.current = '';
+    lastProjectStateRef.current = '';
   }, []);
 
   const syncTodosFromFile = React.useCallback(() => {
@@ -499,13 +501,29 @@ export const AgentProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       // 1. Inyectar la instrucción de sistema rígida con el contexto completo .lch y directrices de LCH Ingeniería (Optimizada con caché)
       let systemPrompt = '';
       if (activeProject) {
-        if (activeProject.id === lastProjectIdRef.current && systemPromptRef.current) {
+        const projectStateStr = JSON.stringify({
+          id: activeProject.id,
+          costTransactions: activeProject.costTransactions,
+          costResources: activeProject.costResources,
+          agentTodos: activeProject.agentTodos,
+          progressReports: activeProject.progressReports,
+          partialReports: activeProject.partialReports,
+          correspondenceFiles: activeProject.correspondenceFiles,
+          budgetItems: activeProject.budgetItems,
+          activityAPUs: activeProject.activityAPUs,
+          agentCustomInstructions: activeProject.agentCustomInstructions,
+          activeBudgetVersionId: activeProject.activeBudgetVersionId,
+          budgetVersions: activeProject.budgetVersions
+        });
+
+        if (activeProject.id === lastProjectIdRef.current && systemPromptRef.current && projectStateStr === lastProjectStateRef.current) {
           systemPrompt = systemPromptRef.current;
         } else {
           console.log("[Agent Memory] Generando y cacheando instrucción de sistema para el proyecto:", activeProject.name);
           const builtPrompt = buildProjectSystemInstruction(activeProject);
           systemPromptRef.current = builtPrompt;
           lastProjectIdRef.current = activeProject.id;
+          lastProjectStateRef.current = projectStateStr;
           systemPrompt = builtPrompt;
         }
       } else {

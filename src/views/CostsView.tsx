@@ -91,6 +91,7 @@ export default function CostsView() {
   const [newTxPrice, setNewTxPrice] = useState<number>(0);
   const [newTxProvider, setNewTxProvider] = useState('');
   const [newTxInvoice, setNewTxInvoice] = useState('');
+  const [catalogSearchText, setCatalogSearchText] = useState('');
 
   // --- ESTADOS DE CONTROL FINANCIERO (Desviaciones) ---
   const [controlSubTab, setControlSubTab] = useState<'activities' | 'resources'>('activities');
@@ -110,6 +111,18 @@ export default function CostsView() {
     const entry = latestProgressReport.entries.find(e => e.itemCode === itemCode);
     return entry ? entry.accumulatedQuantity : 0;
   };
+
+  // Filtrar y ordenar recursos de catálogo alfabéticamente
+  const sortedAndFilteredResources = useMemo(() => {
+    return [...costResources]
+      .sort((a, b) => a.code.localeCompare(b.code))
+      .filter(cr => {
+        if (cr.id === newTxResId) return true; // Keep selected resource visible
+        const search = catalogSearchText.toLowerCase().trim();
+        if (!search) return true;
+        return cr.code.toLowerCase().includes(search) || cr.description.toLowerCase().includes(search);
+      });
+  }, [costResources, catalogSearchText, newTxResId]);
 
   // Filtrar items del presupuesto que sean tipo 'item' (actividades facturables)
   const contractItems = useMemo(() => {
@@ -614,6 +627,7 @@ export default function CostsView() {
     setNewTxResId('');
     setNewTxProvider('');
     setNewTxInvoice('');
+    setCatalogSearchText('');
   };
 
   const handleDeleteTransaction = (id: string) => {
@@ -1513,10 +1527,10 @@ export default function CostsView() {
                    flexShrink: 0, gap: '6px', overflowY: 'auto', maxHeight: '100%'
                  }}>
                    <h3 style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '2px', fontFamily: 'var(--font-technical)' }}>
-                     Registrar Compra / Pago
-                   </h3>
+                      Registrar Compra / Pago
+                    </h3>
 
-                   <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px', width: '100%', minWidth: 0 }}>
                      <span className="input-label" style={{ fontSize: '0.65rem' }}>Fecha</span>
                      <input
                        type="date"
@@ -1524,18 +1538,18 @@ export default function CostsView() {
                        value={newTxDate}
                        onChange={(e) => setNewTxDate(e.target.value)}
                        className="input-field"
-                       style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
+                       style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px', width: '100%', minWidth: 0 }}
                      />
                    </div>
 
-                   <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                   <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px', width: '100%', minWidth: 0 }}>
                      <span className="input-label" style={{ fontSize: '0.65rem' }}>Actividad Asociada *</span>
                      <select
                        required
                        value={newTxItem}
                        onChange={(e) => setNewTxItem(e.target.value)}
                        className="input-field"
-                       style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
+                       style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px', width: '100%', minWidth: 0 }}
                      >
                        <option value="">-- Selecciona Actividad --</option>
                        {contractItems.map(bi => (
@@ -1546,16 +1560,24 @@ export default function CostsView() {
                      </select>
                    </div>
 
-                   <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                   <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px', width: '100%', minWidth: 0 }}>
                      <span className="input-label" style={{ fontSize: '0.65rem' }}>Asociar Insumo del Catálogo</span>
+                     <input
+                       type="text"
+                       placeholder="🔍 Buscar insumo..."
+                       value={catalogSearchText}
+                       onChange={(e) => setCatalogSearchText(e.target.value)}
+                       className="input-field"
+                       style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px', marginBottom: '4px', width: '100%', minWidth: 0 }}
+                     />
                      <select
                        value={newTxResId}
                        onChange={(e) => handleSelectCatalogResource(e.target.value)}
                        className="input-field"
-                       style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
+                       style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px', width: '100%', minWidth: 0 }}
                      >
                        <option value="">-- Sin insumo (Texto libre) --</option>
-                       {costResources.map(cr => (
+                       {sortedAndFilteredResources.map(cr => (
                          <option key={cr.id} value={cr.id}>
                            [{cr.code}] {cr.description} ({cr.unit})
                          </option>
@@ -1563,7 +1585,7 @@ export default function CostsView() {
                      </select>
                    </div>
 
-                   <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                   <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px', width: '100%', minWidth: 0 }}>
                      <span className="input-label" style={{ fontSize: '0.65rem' }}>Descripción Detalle *</span>
                      <input
                        type="text"
@@ -1572,12 +1594,12 @@ export default function CostsView() {
                        onChange={(e) => setNewTxDesc(e.target.value)}
                        placeholder="Ej: Compra de 50 bultos de cemento..."
                        className="input-field"
-                       style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
+                       style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px', width: '100%', minWidth: 0 }}
                      />
                    </div>
 
-                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                     <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', width: '100%', minWidth: 0 }}>
+                     <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px', width: '100%', minWidth: 0 }}>
                        <span className="input-label" style={{ fontSize: '0.65rem' }}>Cantidad *</span>
                        <input
                          type="number"
@@ -1586,10 +1608,10 @@ export default function CostsView() {
                          value={newTxQty || ''}
                          onChange={(e) => setNewTxQty(Number(e.target.value))}
                          className="input-field"
-                         style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
+                         style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px', width: '100%', minWidth: 0 }}
                        />
                      </div>
-                     <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                     <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px', width: '100%', minWidth: 0 }}>
                        <span className="input-label" style={{ fontSize: '0.65rem' }}>Precio Unitario *</span>
                        <input
                          type="number"
@@ -1597,13 +1619,13 @@ export default function CostsView() {
                          value={newTxPrice || ''}
                          onChange={(e) => setNewTxPrice(Number(e.target.value))}
                          className="input-field"
-                         style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
+                         style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px', width: '100%', minWidth: 0 }}
                        />
                      </div>
                    </div>
 
-                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                     <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', width: '100%', minWidth: 0 }}>
+                     <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px', width: '100%', minWidth: 0 }}>
                        <span className="input-label" style={{ fontSize: '0.65rem' }}>Proveedor</span>
                        <input
                          type="text"
@@ -1611,10 +1633,10 @@ export default function CostsView() {
                          onChange={(e) => setNewTxProvider(e.target.value)}
                          placeholder="Ferretería..."
                          className="input-field"
-                         style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
+                         style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px', width: '100%', minWidth: 0 }}
                        />
                      </div>
-                     <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                     <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px', width: '100%', minWidth: 0 }}>
                        <span className="input-label" style={{ fontSize: '0.65rem' }}>Nro Soporte</span>
                        <input
                          type="text"
@@ -1622,7 +1644,7 @@ export default function CostsView() {
                          onChange={(e) => setNewTxInvoice(e.target.value)}
                          placeholder="Fact-987..."
                          className="input-field"
-                         style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
+                         style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px', width: '100%', minWidth: 0 }}
                        />
                      </div>
                    </div>
