@@ -117,6 +117,7 @@ export interface Project {
     projectId: string;
   };
   geminiApiKey?: string;
+  agentCustomInstructions?: string;
   labelOffsets?: Record<string, { x: number, y: number }>;
   showStatusLine?: boolean;
   visibleCurves?: { planned: boolean; executed: boolean; financial: boolean };

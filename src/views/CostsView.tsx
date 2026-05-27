@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, Fragment } from 'react';
 import {
   DollarSign, Calculator, TrendingUp, Bot, Plus, Trash2, Edit, Save,
   AlertTriangle, Check, ArrowRight, Loader2, Sparkles, PlusCircle, 
@@ -91,6 +91,12 @@ export default function CostsView() {
   const [newTxPrice, setNewTxPrice] = useState<number>(0);
   const [newTxProvider, setNewTxProvider] = useState('');
   const [newTxInvoice, setNewTxInvoice] = useState('');
+
+  // --- ESTADOS DE CONTROL FINANCIERO (Desviaciones) ---
+  const [controlSubTab, setControlSubTab] = useState<'activities' | 'resources'>('activities');
+  const [selectedControlItemCode, setSelectedControlItemCode] = useState<string>('');
+  const [selectedCompareResId, setSelectedCompareResId] = useState<string>('');
+  const [searchCompareText, setSearchCompareText] = useState<string>('');
 
   // --- CONSULTAS Y CÁLCULOS GENERALES ---
   // Obtener la cantidad ejecutada acumulada para cada actividad
@@ -671,6 +677,78 @@ export default function CostsView() {
     };
   }, [contractItems, activityAPUs, costTransactions, latestProgressReport]);
 
+  const selectedRealAPU = useMemo(() => {
+    if (!selectedControlItemCode) return null;
+    const apu = activityAPUs.find(a => a.itemCode === selectedControlItemCode);
+    if (!apu) return null;
+
+    const getRealPrice = (desc: string, category: string) => {
+      const typeMap: Record<string, string> = {
+        materials: 'material',
+        labor: 'labor',
+        equipment: 'equipment',
+        transport: 'transport'
+      };
+      const resType = typeMap[category] || 'other';
+
+      const res = costResources.find(r => 
+        r.description.trim().toLowerCase() === desc.trim().toLowerCase() && 
+        r.type === resType
+      );
+
+      let txs = [];
+      if (res) {
+        txs = costTransactions.filter(t => 
+          t.resourceId === res.id || 
+          t.description.trim().toLowerCase() === desc.trim().toLowerCase()
+        );
+      } else {
+        txs = costTransactions.filter(t => 
+          t.description.trim().toLowerCase() === desc.trim().toLowerCase()
+        );
+      }
+
+      const totalQty = txs.reduce((sum, t) => sum + t.quantity, 0);
+      const totalValue = txs.reduce((sum, t) => sum + t.totalPrice, 0);
+      return totalQty > 0 ? totalValue / totalQty : 0;
+    };
+
+    const categories = ['materials', 'labor', 'equipment', 'transport'] as const;
+    const realDetails: Record<string, Array<{ description: string; unit: string; quantity: number; theoreticalPrice: number; theoreticalTotal: number; realPrice: number; realTotal: number; diff: number }>> = {
+      materials: [],
+      labor: [],
+      equipment: [],
+      transport: []
+    };
+
+    let totalRealUnit = 0;
+
+    categories.forEach(cat => {
+      const items = apu[cat] || [];
+      items.forEach(item => {
+        const realPrice = getRealPrice(item.description, cat);
+        const realTotal = item.quantity * realPrice;
+        totalRealUnit += realTotal;
+
+        realDetails[cat].push({
+          description: item.description,
+          unit: item.unit || 'und',
+          quantity: item.quantity,
+          theoreticalPrice: item.price,
+          theoreticalTotal: item.total,
+          realPrice,
+          realTotal,
+          diff: realTotal - item.total
+        });
+      });
+    });
+
+    return {
+      details: realDetails,
+      totalRealUnit
+    };
+  }, [selectedControlItemCode, activityAPUs, costResources, costTransactions]);
+
   return (
     <div className="costs-view-container" style={{
       display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden',
@@ -864,9 +942,8 @@ export default function CostsView() {
       {/* HEADER DE PANTALLA */}
       <div className="page-header" style={{ flexShrink: 0, paddingBottom: 'var(--spacing-md)' }}>
         <div>
-          <span className="technical-heading">ADMINISTRACIÓN FINANCIERA</span>
           <h2 className="page-title" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <DollarSign size={24} style={{ color: 'hsl(var(--accent-primary))' }} /> CONTROL DE COSTOS
+            CONTROL DE COSTOS
           </h2>
         </div>
 
@@ -880,21 +957,21 @@ export default function CostsView() {
             className={`btn ${costsActiveTab === 'contract' ? 'btn-primary' : 'btn-secondary'}`}
             style={{ padding: '6px 12px', fontSize: '0.75rem', height: 'auto' }}
           >
-            📊 Contrato (APUs)
+            Contrato (APUs)
           </button>
           <button
             onClick={() => setCostsActiveTab('operation')}
             className={`btn ${costsActiveTab === 'operation' ? 'btn-primary' : 'btn-secondary'}`}
             style={{ padding: '6px 12px', fontSize: '0.75rem', height: 'auto' }}
           >
-            🛒 Egresos y Catálogo
+            Egresos y Catálogo
           </button>
           <button
             onClick={() => setCostsActiveTab('control')}
             className={`btn ${costsActiveTab === 'control' ? 'btn-primary' : 'btn-secondary'}`}
             style={{ padding: '6px 12px', fontSize: '0.75rem', height: 'auto' }}
           >
-            🚨 Control de Desviaciones
+            Control de Desviaciones
           </button>
         </div>
       </div>
@@ -1005,7 +1082,7 @@ export default function CostsView() {
                             </span>
                             {apu.pdfFileName && (
                               <span title={`Origen: ${apu.pdfFileName}`}>
-                                <FileText size={10} style={{ color: 'hsl(var(--accent-primary))' }} />
+                                <FileText size={10} style={{ color: 'hsl(var(--text-muted))' }} />
                               </span>
                             )}
                           </div>
@@ -1022,42 +1099,44 @@ export default function CostsView() {
             </div>
 
             {/* Detalle del APU (Lado Derecho) */}
-            <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 'var(--spacing-lg)', minWidth: 0 }}>
+            <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '12px var(--spacing-md)', minWidth: 0 }}>
               {selectedBudgetItem ? (
                 <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
                   
                   {/* Encabezado del Item de Contrato */}
                   <div style={{
-                    borderBottom: '1px solid var(--border-color)', paddingBottom: 'var(--spacing-md)',
-                    marginBottom: 'var(--spacing-md)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
+                    borderBottom: '1px solid var(--border-color)', paddingBottom: '6px',
+                    marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                     flexShrink: 0
                   }}>
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem', color: 'hsl(var(--text-muted))' }}>
-                        <span>ACTIVIDAD SELECCIONADA</span>
-                        <ArrowRight size={12} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.7rem', color: 'hsl(var(--text-muted))' }}>
                         <span style={{ fontWeight: 'bold', color: 'hsl(var(--accent-primary))' }}>{selectedBudgetItem.item}</span>
+                        <span>•</span>
+                        <span style={{ fontSize: '0.7rem', color: 'hsl(var(--text-secondary))' }}>
+                          U: <strong>{selectedBudgetItem.unidad}</strong> | Cant: <strong>{selectedBudgetItem.cantidad.toLocaleString()}</strong> | Venta: <strong>${selectedBudgetItem.vlrUnitario.toLocaleString()}</strong>
+                        </span>
                       </div>
-                      <h3 style={{ fontSize: '1.2rem', fontFamily: 'var(--font-technical)', margin: '4px 0 8px 0' }}>
+                      <h3 style={{ 
+                        fontSize: '0.95rem', fontFamily: 'var(--font-technical)', margin: '2px 0 0 0',
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'hsl(var(--text-primary))'
+                      }} title={selectedBudgetItem.descripcion}>
                         {selectedBudgetItem.descripcion}
                       </h3>
-                      <div style={{ display: 'flex', gap: '20px', fontSize: '0.75rem', color: 'hsl(var(--text-secondary))' }}>
-                        <span>Unidad: <strong>{selectedBudgetItem.unidad}</strong></span>
-                        <span>Cantidad Contrato: <strong>{selectedBudgetItem.cantidad.toLocaleString()}</strong></span>
-                        <span>Tarifa Contratada (Venta): <strong>${selectedBudgetItem.vlrUnitario.toLocaleString()}</strong></span>
-                      </div>
                     </div>
 
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '0.65rem', color: 'hsl(var(--text-muted))', letterSpacing: '1px' }}>COSTO ESTIMADO APU</div>
-                      <div style={{
-                        fontSize: '1.5rem', fontFamily: 'var(--font-technical)', fontWeight: 'bold',
-                        color: apuTotals.total > selectedBudgetItem.vlrUnitario ? 'hsl(var(--danger))' : 'hsl(var(--primary-neon))'
-                      }}>
-                        ${apuTotals.total.toLocaleString()}
+                    <div style={{ textAlign: 'right', marginLeft: '20px', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px' }}>
+                        <span style={{ fontSize: '0.6rem', color: 'hsl(var(--text-muted))' }}>COSTO APU:</span>
+                        <span style={{
+                          fontSize: '1rem', fontFamily: 'var(--font-technical)', fontWeight: 'bold',
+                          color: apuTotals.total > selectedBudgetItem.vlrUnitario ? 'hsl(var(--danger))' : 'hsl(var(--primary-neon))'
+                        }}>
+                          ${apuTotals.total.toLocaleString()}
+                        </span>
                       </div>
-                      <div style={{ fontSize: '0.7rem', color: 'hsl(var(--text-secondary))' }}>
-                        Margen Teórico Unitario:{' '}
+                      <div style={{ fontSize: '0.65rem', color: 'hsl(var(--text-secondary))' }}>
+                        Margen:{' '}
                         <strong style={{
                           color: selectedBudgetItem.vlrUnitario - apuTotals.total >= 0 ? 'hsl(var(--success))' : 'hsl(var(--danger))'
                         }}>
@@ -1147,19 +1226,19 @@ export default function CostsView() {
                         <div style={{
                           display: 'flex',
                           alignItems: 'flex-start',
-                          gap: '12px',
-                          background: 'rgba(234, 179, 8, 0.1)',
+                          gap: '10px',
+                          background: 'rgba(234, 179, 8, 0.08)',
                           border: '1px solid hsl(var(--warning))',
-                          padding: '12px 16px',
+                          padding: '6px 12px',
                           borderRadius: 'var(--radius-sm)',
-                          marginBottom: '12px',
-                          fontSize: '0.75rem',
-                          lineHeight: '1.4',
+                          marginBottom: '8px',
+                          fontSize: '0.7rem',
+                          lineHeight: '1.3',
                           flexShrink: 0
                         }}>
-                          <AlertTriangle size={18} style={{ color: 'hsl(var(--warning))', flexShrink: 0, marginTop: '2px' }} />
+                          <AlertTriangle size={15} style={{ color: 'hsl(var(--warning))', flexShrink: 0, marginTop: '1px' }} />
                           <div style={{ flex: 1 }}>
-                            <strong style={{ color: 'hsl(var(--warning))', display: 'block', marginBottom: '2px' }}>
+                            <strong style={{ color: 'hsl(var(--warning))', display: 'block', marginBottom: '1px' }}>
                               ⚠️ ADVERTENCIA: DESVIACIÓN DE TARIFA APU
                             </strong>
                             <span>
@@ -1174,29 +1253,29 @@ export default function CostsView() {
                         <div style={{
                           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                           background: 'hsla(var(--primary-neon-hsl), 0.05)',
-                          border: '1px solid hsla(var(--primary-neon-hsl), 0.2)',
-                          padding: '8px 12px', borderRadius: 'var(--radius-sm)', marginBottom: '12px',
-                          fontSize: '0.75rem', flexShrink: 0
+                          border: '1px solid hsla(var(--primary-neon-hsl), 0.15)',
+                          padding: '4px 10px', borderRadius: 'var(--radius-sm)', marginBottom: '8px',
+                          fontSize: '0.7rem', flexShrink: 0
                         }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <FileText size={16} style={{ color: 'hsl(var(--primary-neon))' }} />
-                            <span>Extraído del archivo: <strong>{selectedAPU.pdfFileName}</strong></span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <FileText size={13} style={{ color: 'hsl(var(--text-muted))' }} />
+                            <span>Archivo APU: <strong>{selectedAPU.pdfFileName}</strong></span>
                           </div>
 
-                          <div style={{ display: 'flex', gap: '10px' }}>
+                          <div style={{ display: 'flex', gap: '8px' }}>
                             <button
                               onClick={() => handleViewPdf(selectedAPU.pdfFileName!)}
                               className="btn btn-secondary"
-                              style={{ padding: '2px 8px', fontSize: '0.65rem', display: 'flex', gap: '4px', height: 'auto' }}
+                              style={{ padding: '2px 6px', fontSize: '0.6rem', display: 'flex', gap: '3px', height: '22px', alignItems: 'center' }}
                             >
-                              <Eye size={12} /> Ver PDF
+                              <Eye size={10} /> Ver PDF
                             </button>
                             <button
                               onClick={() => handleUnlinkPdf(selectedAPU)}
                               className="btn btn-ghost"
-                              style={{ padding: '2px 8px', fontSize: '0.65rem', display: 'flex', gap: '4px', height: 'auto', color: 'hsl(var(--danger))' }}
+                              style={{ padding: '2px 6px', fontSize: '0.6rem', display: 'flex', gap: '3px', height: '22px', alignItems: 'center', color: 'hsl(var(--danger))' }}
                             >
-                              <Trash2 size={12} /> Desvincular
+                              <Trash2 size={10} /> Desvincular
                             </button>
                           </div>
                         </div>
@@ -1204,78 +1283,65 @@ export default function CostsView() {
 
                       {/* Formulario de Agregar Recurso al APU */}
                       <form onSubmit={handleAddApuResource} style={{
-                        display: 'grid', gridTemplateColumns: '120px 1fr 60px 100px 100px auto', gap: '8px',
-                        padding: '10px', background: 'hsla(var(--bg-tertiary), 0.5)', borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border-color)', marginBottom: '12px', flexShrink: 0, alignItems: 'end'
+                        display: 'grid', gridTemplateColumns: '110px 1fr 60px 80px 90px auto', gap: '6px',
+                        padding: '6px 8px', background: 'hsla(var(--bg-tertiary), 0.3)', borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border-color)', marginBottom: '10px', flexShrink: 0, alignItems: 'center'
                       }}>
-                        <div className="input-group" style={{ margin: 0 }}>
-                          <span className="input-label" style={{ fontSize: '0.6rem' }}>Categoría</span>
-                          <select
-                            value={newApuResType}
-                            onChange={(e: any) => setNewApuResType(e.target.value)}
-                            className="input-field"
-                            style={{ padding: '4px 6px', fontSize: '0.7rem', height: '30px' }}
-                          >
-                            <option value="materials">Materiales</option>
-                            <option value="labor">Mano de Obra</option>
-                            <option value="equipment">Equipos</option>
-                            <option value="transport">Transporte</option>
-                          </select>
-                        </div>
+                        <select
+                          value={newApuResType}
+                          onChange={(e: any) => setNewApuResType(e.target.value)}
+                          className="input-field"
+                          style={{ padding: '2px 6px', fontSize: '0.7rem', height: '26px', margin: 0 }}
+                        >
+                          <option value="materials">Materiales</option>
+                          <option value="labor">Mano de Obra</option>
+                          <option value="equipment">Equipos</option>
+                          <option value="transport">Transporte</option>
+                        </select>
                         
-                        <div className="input-group" style={{ margin: 0 }}>
-                          <span className="input-label" style={{ fontSize: '0.6rem' }}>Descripción Insumo</span>
-                          <input
-                            type="text"
-                            required
-                            value={newApuResDesc}
-                            onChange={(e) => setNewApuResDesc(e.target.value)}
-                            placeholder="Ej: Mezcla concreto..."
-                            className="input-field"
-                            style={{ padding: '4px 6px', fontSize: '0.7rem', height: '30px' }}
-                          />
-                        </div>
+                        <input
+                          type="text"
+                          required
+                          value={newApuResDesc}
+                          onChange={(e) => setNewApuResDesc(e.target.value)}
+                          placeholder="Descripción Insumo..."
+                          className="input-field"
+                          style={{ padding: '2px 6px', fontSize: '0.7rem', height: '26px', margin: 0 }}
+                        />
 
-                        <div className="input-group" style={{ margin: 0 }}>
-                          <span className="input-label" style={{ fontSize: '0.6rem' }}>Unidad</span>
-                          <input
-                            type="text"
-                            required
-                            value={newApuResUnit}
-                            onChange={(e) => setNewApuResUnit(e.target.value)}
-                            placeholder="kg"
-                            className="input-field"
-                            style={{ padding: '4px 6px', fontSize: '0.7rem', height: '30px' }}
-                          />
-                        </div>
+                        <input
+                          type="text"
+                          required
+                          value={newApuResUnit}
+                          onChange={(e) => setNewApuResUnit(e.target.value)}
+                          placeholder="Unidad"
+                          className="input-field"
+                          style={{ padding: '2px 6px', fontSize: '0.7rem', height: '26px', margin: 0 }}
+                        />
 
-                        <div className="input-group" style={{ margin: 0 }}>
-                          <span className="input-label" style={{ fontSize: '0.6rem' }}>Cant/Rend</span>
-                          <input
-                            type="number"
-                            required
-                            step="any"
-                            value={newApuResQty}
-                            onChange={(e) => setNewApuResQty(Number(e.target.value))}
-                            className="input-field"
-                            style={{ padding: '4px 6px', fontSize: '0.7rem', height: '30px' }}
-                          />
-                        </div>
+                        <input
+                          type="number"
+                          required
+                          step="any"
+                          value={newApuResQty || ''}
+                          onChange={(e) => setNewApuResQty(Number(e.target.value))}
+                          placeholder="Cant/Rend"
+                          className="input-field"
+                          style={{ padding: '2px 6px', fontSize: '0.7rem', height: '26px', margin: 0 }}
+                        />
 
-                        <div className="input-group" style={{ margin: 0 }}>
-                          <span className="input-label" style={{ fontSize: '0.6rem' }}>Valor Unitario</span>
-                          <input
-                            type="number"
-                            required
-                            value={newApuResPrice}
-                            onChange={(e) => setNewApuResPrice(Number(e.target.value))}
-                            className="input-field"
-                            style={{ padding: '4px 6px', fontSize: '0.7rem', height: '30px' }}
-                          />
-                        </div>
+                        <input
+                          type="number"
+                          required
+                          value={newApuResPrice || ''}
+                          onChange={(e) => setNewApuResPrice(Number(e.target.value))}
+                          placeholder="Precio Unit."
+                          className="input-field"
+                          style={{ padding: '2px 6px', fontSize: '0.7rem', height: '26px', margin: 0 }}
+                        />
 
-                        <button type="submit" className="btn btn-primary" style={{ height: '30px', padding: '0 10px', fontSize: '0.7rem' }}>
-                          <Plus size={12} /> Agregar
+                        <button type="submit" className="btn btn-primary" style={{ height: '26px', padding: '0 8px', fontSize: '0.65rem', display: 'flex', gap: '3px', alignItems: 'center' }}>
+                          <Plus size={10} /> AGREGAR
                         </button>
                       </form>
 
@@ -1330,11 +1396,11 @@ export default function CostsView() {
                                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                                             {catRes && (
                                               <span style={{ 
-                                                color: 'hsl(var(--accent-primary))', 
+                                                color: 'hsl(var(--text-secondary))', 
                                                 fontWeight: 'bold', 
                                                 fontFamily: 'monospace',
-                                                background: 'hsla(var(--primary-neon-hsl), 0.1)',
-                                                border: '1px solid hsla(var(--primary-neon-hsl), 0.2)',
+                                                background: 'rgba(255, 255, 255, 0.05)',
+                                                border: '1px solid rgba(255, 255, 255, 0.1)',
                                                 padding: '1px 4px',
                                                 borderRadius: '3px',
                                                 fontSize: '0.65rem',
@@ -1441,141 +1507,141 @@ export default function CostsView() {
             {/* Sub-vista A: Bitácora de Egresos */}
             {opSubTab === 'transactions' && (
               <div style={{ display: 'flex', gap: 'var(--spacing-md)', flex: 1, minHeight: 0 }}>
-                {/* Formulario de Egreso (Lado Izquierdo) */}
-                <form onSubmit={handleAddTransaction} className="glass-panel" style={{
-                  width: '320px', display: 'flex', flexDirection: 'column', padding: 'var(--spacing-md)',
-                  flexShrink: 0, gap: '10px'
-                }}>
-                  <h3 style={{ fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px', fontFamily: 'var(--font-technical)' }}>
-                    Registrar Compra / Pago
-                  </h3>
+                 {/* Formulario de Egreso (Lado Izquierdo) */}
+                 <form onSubmit={handleAddTransaction} className="glass-panel" style={{
+                   width: '320px', display: 'flex', flexDirection: 'column', padding: '10px 12px',
+                   flexShrink: 0, gap: '6px', overflowY: 'auto', maxHeight: '100%'
+                 }}>
+                   <h3 style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '2px', fontFamily: 'var(--font-technical)' }}>
+                     Registrar Compra / Pago
+                   </h3>
 
-                  <div className="input-group" style={{ margin: 0 }}>
-                    <span className="input-label">Fecha</span>
-                    <input
-                      type="date"
-                      required
-                      value={newTxDate}
-                      onChange={(e) => setNewTxDate(e.target.value)}
-                      className="input-field"
-                      style={{ padding: '6px 8px', fontSize: '0.75rem' }}
-                    />
-                  </div>
+                   <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                     <span className="input-label" style={{ fontSize: '0.65rem' }}>Fecha</span>
+                     <input
+                       type="date"
+                       required
+                       value={newTxDate}
+                       onChange={(e) => setNewTxDate(e.target.value)}
+                       className="input-field"
+                       style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
+                     />
+                   </div>
 
-                  <div className="input-group" style={{ margin: 0 }}>
-                    <span className="input-label">Actividad Asociada *</span>
-                    <select
-                      required
-                      value={newTxItem}
-                      onChange={(e) => setNewTxItem(e.target.value)}
-                      className="input-field"
-                      style={{ padding: '6px 8px', fontSize: '0.75rem' }}
-                    >
-                      <option value="">-- Selecciona Actividad --</option>
-                      {contractItems.map(bi => (
-                        <option key={bi.item} value={bi.item}>
-                          {bi.item} - {bi.descripcion}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                   <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                     <span className="input-label" style={{ fontSize: '0.65rem' }}>Actividad Asociada *</span>
+                     <select
+                       required
+                       value={newTxItem}
+                       onChange={(e) => setNewTxItem(e.target.value)}
+                       className="input-field"
+                       style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
+                     >
+                       <option value="">-- Selecciona Actividad --</option>
+                       {contractItems.map(bi => (
+                         <option key={bi.item} value={bi.item}>
+                           {bi.item} - {bi.descripcion}
+                         </option>
+                       ))}
+                     </select>
+                   </div>
 
-                  <div className="input-group" style={{ margin: 0 }}>
-                    <span className="input-label">Asociar Insumo del Catálogo</span>
-                    <select
-                      value={newTxResId}
-                      onChange={(e) => handleSelectCatalogResource(e.target.value)}
-                      className="input-field"
-                      style={{ padding: '6px 8px', fontSize: '0.75rem' }}
-                    >
-                      <option value="">-- Sin insumo (Texto libre) --</option>
-                      {costResources.map(cr => (
-                        <option key={cr.id} value={cr.id}>
-                          [{cr.code}] {cr.description} ({cr.unit})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                   <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                     <span className="input-label" style={{ fontSize: '0.65rem' }}>Asociar Insumo del Catálogo</span>
+                     <select
+                       value={newTxResId}
+                       onChange={(e) => handleSelectCatalogResource(e.target.value)}
+                       className="input-field"
+                       style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
+                     >
+                       <option value="">-- Sin insumo (Texto libre) --</option>
+                       {costResources.map(cr => (
+                         <option key={cr.id} value={cr.id}>
+                           [{cr.code}] {cr.description} ({cr.unit})
+                         </option>
+                       ))}
+                     </select>
+                   </div>
 
-                  <div className="input-group" style={{ margin: 0 }}>
-                    <span className="input-label">Descripción Detalle *</span>
-                    <input
-                      type="text"
-                      required
-                      value={newTxDesc}
-                      onChange={(e) => setNewTxDesc(e.target.value)}
-                      placeholder="Ej: Compra de 50 bultos de cemento..."
-                      className="input-field"
-                      style={{ padding: '6px 8px', fontSize: '0.75rem' }}
-                    />
-                  </div>
+                   <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                     <span className="input-label" style={{ fontSize: '0.65rem' }}>Descripción Detalle *</span>
+                     <input
+                       type="text"
+                       required
+                       value={newTxDesc}
+                       onChange={(e) => setNewTxDesc(e.target.value)}
+                       placeholder="Ej: Compra de 50 bultos de cemento..."
+                       className="input-field"
+                       style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
+                     />
+                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                    <div className="input-group" style={{ margin: 0 }}>
-                      <span className="input-label">Cantidad *</span>
-                      <input
-                        type="number"
-                        required
-                        step="any"
-                        value={newTxQty}
-                        onChange={(e) => setNewTxQty(Number(e.target.value))}
-                        className="input-field"
-                        style={{ padding: '6px 8px', fontSize: '0.75rem' }}
-                      />
-                    </div>
-                    <div className="input-group" style={{ margin: 0 }}>
-                      <span className="input-label">Precio Unitario *</span>
-                      <input
-                        type="number"
-                        required
-                        value={newTxPrice}
-                        onChange={(e) => setNewTxPrice(Number(e.target.value))}
-                        className="input-field"
-                        style={{ padding: '6px 8px', fontSize: '0.75rem' }}
-                      />
-                    </div>
-                  </div>
+                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                     <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                       <span className="input-label" style={{ fontSize: '0.65rem' }}>Cantidad *</span>
+                       <input
+                         type="number"
+                         required
+                         step="any"
+                         value={newTxQty || ''}
+                         onChange={(e) => setNewTxQty(Number(e.target.value))}
+                         className="input-field"
+                         style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
+                       />
+                     </div>
+                     <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                       <span className="input-label" style={{ fontSize: '0.65rem' }}>Precio Unitario *</span>
+                       <input
+                         type="number"
+                         required
+                         value={newTxPrice || ''}
+                         onChange={(e) => setNewTxPrice(Number(e.target.value))}
+                         className="input-field"
+                         style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
+                       />
+                     </div>
+                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                    <div className="input-group" style={{ margin: 0 }}>
-                      <span className="input-label">Proveedor</span>
-                      <input
-                        type="text"
-                        value={newTxProvider}
-                        onChange={(e) => setNewTxProvider(e.target.value)}
-                        placeholder="Ferretería..."
-                        className="input-field"
-                        style={{ padding: '6px 8px', fontSize: '0.75rem' }}
-                      />
-                    </div>
-                    <div className="input-group" style={{ margin: 0 }}>
-                      <span className="input-label">Nro Soporte</span>
-                      <input
-                        type="text"
-                        value={newTxInvoice}
-                        onChange={(e) => setNewTxInvoice(e.target.value)}
-                        placeholder="Fact-987..."
-                        className="input-field"
-                        style={{ padding: '6px 8px', fontSize: '0.75rem' }}
-                      />
-                    </div>
-                  </div>
+                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                     <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                       <span className="input-label" style={{ fontSize: '0.65rem' }}>Proveedor</span>
+                       <input
+                         type="text"
+                         value={newTxProvider}
+                         onChange={(e) => setNewTxProvider(e.target.value)}
+                         placeholder="Ferretería..."
+                         className="input-field"
+                         style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
+                       />
+                     </div>
+                     <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                       <span className="input-label" style={{ fontSize: '0.65rem' }}>Nro Soporte</span>
+                       <input
+                         type="text"
+                         value={newTxInvoice}
+                         onChange={(e) => setNewTxInvoice(e.target.value)}
+                         placeholder="Fact-987..."
+                         className="input-field"
+                         style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
+                       />
+                     </div>
+                   </div>
 
-                  <div style={{
-                    marginTop: '4px', fontSize: '0.8rem', color: 'hsl(var(--text-muted))',
-                    display: 'flex', justifyContent: 'space-between', padding: '6px',
-                    background: 'hsla(var(--bg-tertiary), 0.3)', borderRadius: '4px'
-                  }}>
-                    <span>TOTAL REGISTRO:</span>
-                    <strong style={{ color: 'hsl(var(--primary-neon))' }}>
-                      ${(newTxQty * newTxPrice).toLocaleString()}
-                    </strong>
-                  </div>
+                   <div style={{
+                     marginTop: '2px', fontSize: '0.75rem', color: 'hsl(var(--text-muted))',
+                     display: 'flex', justifyContent: 'space-between', padding: '4px 6px',
+                     background: 'hsla(var(--bg-tertiary), 0.3)', borderRadius: '4px', flexShrink: 0
+                   }}>
+                     <span>TOTAL REGISTRO:</span>
+                     <strong style={{ color: 'hsl(var(--primary-neon))' }}>
+                       ${(newTxQty * newTxPrice).toLocaleString()}
+                     </strong>
+                   </div>
 
-                  <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '8px', fontSize: '0.8rem' }}>
-                    <PlusCircle size={14} /> Registrar en Bitácora
-                  </button>
-                </form>
+                   <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '6px', fontSize: '0.75rem', height: '30px', flexShrink: 0 }}>
+                     <PlusCircle size={12} /> Registrar en Bitácora
+                   </button>
+                 </form>
 
                 {/* Tabla de Egresos Registrados (Lado Derecho) */}
                 <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 'var(--spacing-md)', minWidth: 0 }}>
@@ -1651,15 +1717,15 @@ export default function CostsView() {
               <div style={{ display: 'flex', gap: 'var(--spacing-md)', flex: 1, minHeight: 0 }}>
                 {/* Crear Recurso (Lado Izquierdo) */}
                 <form onSubmit={handleAddCatResource} className="glass-panel" style={{
-                  width: '320px', display: 'flex', flexDirection: 'column', padding: 'var(--spacing-md)',
-                  flexShrink: 0, gap: '12px'
+                  width: '320px', display: 'flex', flexDirection: 'column', padding: '10px 12px',
+                  flexShrink: 0, gap: '6px', overflowY: 'auto', maxHeight: '100%'
                 }}>
-                  <h3 style={{ fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px', fontFamily: 'var(--font-technical)' }}>
+                  <h3 style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '2px', fontFamily: 'var(--font-technical)' }}>
                     Nuevo Insumo
                   </h3>
 
-                  <div className="input-group" style={{ margin: 0 }}>
-                    <span className="input-label">Código Insumo *</span>
+                  <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    <span className="input-label" style={{ fontSize: '0.65rem' }}>Código Insumo *</span>
                     <input
                       type="text"
                       required
@@ -1667,12 +1733,12 @@ export default function CostsView() {
                       onChange={(e) => setNewCatCode(e.target.value)}
                       placeholder="Ej: MAT-01, MO-12..."
                       className="input-field"
-                      style={{ padding: '6px 8px', fontSize: '0.75rem' }}
+                      style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
                     />
                   </div>
 
-                  <div className="input-group" style={{ margin: 0 }}>
-                    <span className="input-label">Descripción *</span>
+                  <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    <span className="input-label" style={{ fontSize: '0.65rem' }}>Descripción *</span>
                     <input
                       type="text"
                       required
@@ -1680,17 +1746,17 @@ export default function CostsView() {
                       onChange={(e) => setNewCatDesc(e.target.value)}
                       placeholder="Ej: Bulto cemento gris..."
                       className="input-field"
-                      style={{ padding: '6px 8px', fontSize: '0.75rem' }}
+                      style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
                     />
                   </div>
 
-                  <div className="input-group" style={{ margin: 0 }}>
-                    <span className="input-label">Tipo</span>
+                  <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    <span className="input-label" style={{ fontSize: '0.65rem' }}>Tipo</span>
                     <select
                       value={newCatType}
                       onChange={(e: any) => setNewCatType(e.target.value)}
                       className="input-field"
-                      style={{ padding: '6px 8px', fontSize: '0.75rem' }}
+                      style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
                     >
                       <option value="material">Material</option>
                       <option value="labor">Mano de Obra</option>
@@ -1700,8 +1766,8 @@ export default function CostsView() {
                     </select>
                   </div>
 
-                  <div className="input-group" style={{ margin: 0 }}>
-                    <span className="input-label">Unidad de Medida</span>
+                  <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    <span className="input-label" style={{ fontSize: '0.65rem' }}>Unidad de Medida</span>
                     <input
                       type="text"
                       required
@@ -1709,24 +1775,24 @@ export default function CostsView() {
                       onChange={(e) => setNewCatUnit(e.target.value)}
                       placeholder="Ej: bto, kg, h..."
                       className="input-field"
-                      style={{ padding: '6px 8px', fontSize: '0.75rem' }}
+                      style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
                     />
                   </div>
 
-                  <div className="input-group" style={{ margin: 0 }}>
-                    <span className="input-label">Precio Referencia *</span>
+                  <div className="input-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    <span className="input-label" style={{ fontSize: '0.65rem' }}>Precio Referencia *</span>
                     <input
                       type="number"
                       required
-                      value={newCatPrice}
+                      value={newCatPrice || ''}
                       onChange={(e) => setNewCatPrice(Number(e.target.value))}
                       className="input-field"
-                      style={{ padding: '6px 8px', fontSize: '0.75rem' }}
+                      style={{ padding: '4px 6px', fontSize: '0.7rem', height: '28px' }}
                     />
                   </div>
 
-                  <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '8px', fontSize: '0.8rem' }}>
-                    <Plus size={14} /> Registrar Insumo
+                  <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '6px', fontSize: '0.75rem', height: '30px', flexShrink: 0 }}>
+                    <Plus size={12} /> Registrar Insumo
                   </button>
                 </form>
 
@@ -1794,290 +1860,644 @@ export default function CostsView() {
         {costsActiveTab === 'control' && (
           <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 'var(--spacing-md)' }}>
             
-            {/* KPI Cards Row */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', flexShrink: 0 }}>
-              
-              <div className="glass-card" style={{ padding: '16px', display: 'flex', flexDirection: 'column' }}>
-                <span style={{ fontSize: '0.65rem', color: 'hsl(var(--text-muted))', letterSpacing: '1px', textTransform: 'uppercase' }}>
-                  Ingresos Ejecutados (Venta)
-                </span>
-                <strong style={{ fontSize: '1.4rem', fontFamily: 'var(--font-technical)', margin: '4px 0' }}>
-                  ${financialSummary.executedIncome.toLocaleString()}
-                </strong>
-                <span style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>
-                  Suma de (Cant. Ejecutada * Precio Contrato)
-                </span>
+            {/* Cabecera de Selección y Búsqueda */}
+            <div style={{
+              display: 'flex',
+              gap: '12px',
+              alignItems: 'center',
+              background: 'hsla(var(--bg-tertiary), 0.3)',
+              padding: '10px 14px',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--border-color)',
+              flexShrink: 0,
+              flexWrap: 'wrap'
+            }}>
+              {/* Selector de tipo */}
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  onClick={() => setControlSubTab('activities')}
+                  className={`btn ${controlSubTab === 'activities' ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ padding: '6px 12px', fontSize: '0.75rem', height: '32px' }}
+                >
+                  📊 COMPARAR ACTIVIDAD
+                </button>
+                <button
+                  onClick={() => setControlSubTab('resources')}
+                  className={`btn ${controlSubTab === 'resources' ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ padding: '6px 12px', fontSize: '0.75rem', height: '32px' }}
+                >
+                  🔍 COMPARAR INSUMO
+                </button>
               </div>
 
-              <div className="glass-card" style={{ padding: '16px', display: 'flex', flexDirection: 'column' }}>
-                <span style={{ fontSize: '0.65rem', color: 'hsl(var(--text-muted))', letterSpacing: '1px', textTransform: 'uppercase' }}>
-                  Costo Estimado APU
+              {/* Filtro y selector de ítem activo */}
+              <div style={{ display: 'flex', gap: '8px', flex: 1, minWidth: '320px', alignItems: 'center' }}>
+                <span style={{ fontSize: '0.75rem', color: 'hsl(var(--text-secondary))', fontWeight: 'bold' }}>
+                  {controlSubTab === 'activities' ? 'Actividad:' : 'Insumo:'}
                 </span>
-                <strong style={{ fontSize: '1.4rem', fontFamily: 'var(--font-technical)', margin: '4px 0', color: 'hsl(var(--accent-primary))' }}>
-                  ${financialSummary.plannedCost.toLocaleString()}
-                </strong>
-                <span style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>
-                  Suma de (Cant. Ejecutada * Costo APU)
-                </span>
-              </div>
 
-              <div className="glass-card" style={{ padding: '16px', display: 'flex', flexDirection: 'column' }}>
-                <span style={{ fontSize: '0.65rem', color: 'hsl(var(--text-muted))', letterSpacing: '1px', textTransform: 'uppercase' }}>
-                  Egresos Reales (Pagos)
-                </span>
-                <strong style={{ fontSize: '1.4rem', fontFamily: 'var(--font-technical)', margin: '4px 0', color: 'hsl(var(--warning))' }}>
-                  ${financialSummary.realCost.toLocaleString()}
-                </strong>
-                <span style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>
-                  Suma de todos los egresos registrados
-                </span>
-              </div>
+                {/* Input de texto para filtrar las opciones del select */}
+                <input
+                  type="text"
+                  placeholder={controlSubTab === 'activities' ? "Filtrar actividades..." : "Filtrar insumos..."}
+                  value={searchCompareText}
+                  onChange={(e) => setSearchCompareText(e.target.value)}
+                  className="input-field"
+                  style={{ padding: '6px 10px', fontSize: '0.75rem', margin: 0, width: '150px', height: '32px' }}
+                />
 
-              <div className="glass-card" style={{
-                padding: '16px', display: 'flex', flexDirection: 'column',
-                borderLeft: `4px solid ${financialSummary.marginReal >= 0 ? 'hsl(var(--success))' : 'hsl(var(--danger))'}`
-              }}>
-                <span style={{ fontSize: '0.65rem', color: 'hsl(var(--text-muted))', letterSpacing: '1px', textTransform: 'uppercase' }}>
-                  Margen Real Acumulado
-                </span>
-                <strong style={{
-                  fontSize: '1.4rem', fontFamily: 'var(--font-technical)', margin: '4px 0',
-                  color: financialSummary.marginReal >= 0 ? 'hsl(var(--success))' : 'hsl(var(--danger))'
-                }}>
-                  ${financialSummary.marginReal.toLocaleString()} ({Math.round(financialSummary.marginPercent)}%)
-                </strong>
-                <span style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>
-                  Diferencia: Ejecutado - Egresos Reales
-                </span>
+                {/* Selector Dropdown */}
+                {controlSubTab === 'activities' ? (
+                  <select
+                    value={selectedControlItemCode}
+                    onChange={(e) => setSelectedControlItemCode(e.target.value)}
+                    className="input-field"
+                    style={{ padding: '6px 10px', fontSize: '0.75rem', margin: 0, flex: 1, height: '32px', maxWidth: '350px' }}
+                  >
+                    <option value="">-- Selecciona una Actividad --</option>
+                    {contractItems
+                      .filter(bi => 
+                        bi.item.toLowerCase().includes(searchCompareText.toLowerCase()) ||
+                        bi.descripcion.toLowerCase().includes(searchCompareText.toLowerCase())
+                      )
+                      .map(bi => (
+                        <option key={bi.item} value={bi.item}>
+                          {bi.item} - {bi.descripcion}
+                        </option>
+                      ))
+                    }
+                  </select>
+                ) : (
+                  <select
+                    value={selectedCompareResId}
+                    onChange={(e) => setSelectedCompareResId(e.target.value)}
+                    className="input-field"
+                    style={{ padding: '6px 10px', fontSize: '0.75rem', margin: 0, flex: 1, height: '32px', maxWidth: '350px' }}
+                  >
+                    <option value="">-- Selecciona un Insumo --</option>
+                    {[...costResources]
+                      .sort((a, b) => a.description.localeCompare(b.description))
+                      .filter(cr => 
+                        cr.code.toLowerCase().includes(searchCompareText.toLowerCase()) ||
+                        cr.description.toLowerCase().includes(searchCompareText.toLowerCase())
+                      )
+                      .map(cr => (
+                        <option key={cr.id} value={cr.id}>
+                          [{cr.code}] {cr.description} ({cr.unit})
+                        </option>
+                      ))
+                    }
+                  </select>
+                )}
               </div>
-
             </div>
 
-            {/* Fila de Controles y Alertas */}
-            <div style={{ display: 'flex', gap: '16px', flex: 1, minHeight: 0 }}>
-              
-              {/* Tabla de Desviaciones por Actividad */}
-              <div className="glass-panel" style={{ flex: 2, display: 'flex', flexDirection: 'column', padding: 'var(--spacing-md)', minWidth: 0 }}>
-                <h3 style={{ fontSize: '0.9rem', marginBottom: '10px', textTransform: 'uppercase', fontFamily: 'var(--font-technical)', display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Control de Desviaciones por Actividad</span>
-                  <span style={{ fontSize: '0.7rem', color: 'hsl(var(--text-muted))' }}>Cruzado con Avance Físico</span>
-                </h3>
-
-                <div className="floating-scroll" style={{ flex: 1, minHeight: 0 }}>
-                  <table className="data-table" style={{ fontSize: '0.7rem' }}>
-                    <thead>
-                      <tr>
-                        <th style={{ width: '8%' }}>Código</th>
-                        <th style={{ width: '22%' }}>Actividad Presupuesto</th>
-                        <th style={{ width: '8%', textAlign: 'right' }}>Cant. Ejec.</th>
-                        <th style={{ width: '12%', textAlign: 'right' }}>Cobrado Cliente</th>
-                        <th style={{ width: '12%', textAlign: 'right' }}>Est. APU Unit</th>
-                        <th style={{ width: '12%', textAlign: 'right' }}>Est. APU Total</th>
-                        <th style={{ width: '12%', textAlign: 'right' }}>Gastado Real</th>
-                        <th style={{ width: '14%', textAlign: 'right' }}>Margen Real</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {contractItems.map(bi => {
-                        const executedQty = getExecutedQty(bi.item);
-                        const incomeVal = executedQty * bi.vlrUnitario;
-
-                        // Buscar APU
-                        const apu = activityAPUs.find(a => a.itemCode === bi.item);
-                        const apuUnitCost = apu 
-                          ? apu.materials.reduce((acc, r) => acc + r.total, 0) +
-                            apu.labor.reduce((acc, r) => acc + r.total, 0) +
-                            apu.equipment.reduce((acc, r) => acc + r.total, 0) +
-                            apu.transport.reduce((acc, r) => acc + r.total, 0)
-                          : 0;
-                        const apuTotalCost = executedQty * apuUnitCost;
-
-                        // Buscar egresos reales asociados a este ítem en la bitácora
-                        const realCost = costTransactions
-                          .filter(tx => tx.itemCode === bi.item)
-                          .reduce((acc, tx) => acc + tx.totalPrice, 0);
-
-                        const marginReal = incomeVal - realCost;
-                        const hasLoss = realCost > apuTotalCost && apuTotalCost > 0;
-                        
-                        // Validar descuadre entre APU y Presupuesto
-                        const hasApuDiscrepancy = apu && Math.abs(apuUnitCost - bi.vlrUnitario) > 1.0;
-
-                        return (
-                          <tr key={bi.item} style={{
-                            background: hasLoss ? 'rgba(255, 0, 80, 0.04)' : 'transparent'
-                          }}>
-                            <td><strong style={{ color: 'hsl(var(--accent-primary))' }}>{bi.item}</strong></td>
-                            <td style={{
-                              whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', maxWidth: '200px'
-                            }} title={bi.descripcion}>
-                              {bi.descripcion}
-                            </td>
-                            <td className="cell-right">{executedQty.toLocaleString()}</td>
-                            <td className="cell-right">${incomeVal.toLocaleString()}</td>
-                            <td className="cell-right" style={{
-                              color: hasApuDiscrepancy ? 'hsl(var(--warning))' : 'inherit',
-                              fontWeight: hasApuDiscrepancy ? 'bold' : 'normal'
-                            }}>
-                              {hasApuDiscrepancy && (
-                                <span title={`Descuadre de tarifa de APU vs Contrato. Presupuestado: $${bi.vlrUnitario.toLocaleString()}`} style={{ marginRight: '4px', cursor: 'help' }}>
-                                  ⚠️
-                                </span>
-                              )}
-                              ${apuUnitCost.toLocaleString()}
-                            </td>
-                            <td className="cell-right" style={{ color: 'hsl(var(--text-secondary))' }}>
-                              ${apuTotalCost.toLocaleString()}
-                            </td>
-                            <td className="cell-right" style={{
-                              color: realCost > apuTotalCost && apuTotalCost > 0 ? 'hsl(var(--danger))' : 'inherit'
-                            }}>
-                              ${realCost.toLocaleString()}
-                            </td>
-                            <td className="cell-right" style={{
-                              color: marginReal >= 0 ? 'hsl(var(--success))' : 'hsl(var(--danger))',
-                              fontWeight: 'bold'
-                            }}>
-                              ${marginReal.toLocaleString()}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {/* Panel de Alertas Financieras y Consumos */}
-              <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 'var(--spacing-md)', minWidth: 0 }}>
-                <h3 style={{ fontSize: '0.9rem', marginBottom: '10px', textTransform: 'uppercase', fontFamily: 'var(--font-technical)' }}>
-                  Alertas y Análisis de Consumos
-                </h3>
-
-                <div className="floating-scroll" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {/* CUERPO DE LA COMPARATIVA */}
+            {controlSubTab === 'activities' ? (
+              // COMPARATIVO POR ACTIVIDAD
+              selectedControlItemCode ? (
+                <div style={{ display: 'flex', gap: '16px', flex: 1, minHeight: 0 }}>
                   
-                  {/* Generar alertas de pérdidas reales */}
-                  {contractItems.map(bi => {
-                    const executedQty = getExecutedQty(bi.item);
-                    const apu = activityAPUs.find(a => a.itemCode === bi.item);
-                    if (!apu) return null;
-
-                    const apuUnitCost = 
-                      apu.materials.reduce((acc, r) => acc + r.total, 0) +
-                      apu.labor.reduce((acc, r) => acc + r.total, 0) +
-                      apu.equipment.reduce((acc, r) => acc + r.total, 0) +
-                      apu.transport.reduce((acc, r) => acc + r.total, 0);
-
-                    const apuTotalCost = executedQty * apuUnitCost;
-                    const realCost = costTransactions
-                      .filter(tx => tx.itemCode === bi.item)
-                      .reduce((acc, tx) => acc + tx.totalPrice, 0);
-
-                    if (realCost > apuTotalCost && apuTotalCost > 0) {
-                      const loss = realCost - apuTotalCost;
-                      return (
-                        <div key={bi.item} style={{
-                          border: '1px solid hsl(var(--danger))', background: 'rgba(255,0,80,0.05)',
-                          padding: '10px', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem'
-                        }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'hsl(var(--danger))', fontWeight: 'bold', marginBottom: '4px' }}>
-                            <AlertTriangle size={14} />
-                            <span>DESVIACIÓN EN {bi.item}</span>
-                          </div>
-                          <p style={{ color: 'hsl(var(--text-secondary))', fontSize: '0.7rem' }}>
-                            El egreso registrado (<strong>${realCost.toLocaleString()}</strong>) supera el costo estimado del APU de contrato (<strong>${apuTotalCost.toLocaleString()}</strong>) en <strong>${loss.toLocaleString()}</strong>.
-                          </p>
-                        </div>
-                      );
-                    }
-                    return null;
-                  })}
-
-                  {/* Alertas de Descuadre de APU frente al Presupuesto */}
-                  {contractItems.map(bi => {
-                    const apu = activityAPUs.find(a => a.itemCode === bi.item);
-                    if (!apu) return null;
-
-                    const apuUnitCost = 
-                      apu.materials.reduce((acc, r) => acc + r.total, 0) +
-                      apu.labor.reduce((acc, r) => acc + r.total, 0) +
-                      apu.equipment.reduce((acc, r) => acc + r.total, 0) +
-                      apu.transport.reduce((acc, r) => acc + r.total, 0);
-
-                    if (Math.abs(apuUnitCost - bi.vlrUnitario) > 1.0) {
-                      const diff = apuUnitCost - bi.vlrUnitario;
-                      return (
-                        <div key={`descuadre-${bi.item}`} style={{
-                          border: '1px solid hsl(var(--warning))', background: 'rgba(234,179,8,0.05)',
-                          padding: '10px', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem'
-                        }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'hsl(var(--warning))', fontWeight: 'bold', marginBottom: '4px' }}>
-                            <AlertTriangle size={14} />
-                            <span>DESCUADRE DE APU EN {bi.item}</span>
-                          </div>
-                          <p style={{ color: 'hsl(var(--text-secondary))', fontSize: '0.7rem' }}>
-                            El costo unitario estimado del APU (<strong>${apuUnitCost.toLocaleString()}</strong>) no coincide con el valor unitario contratado (<strong>${bi.vlrUnitario.toLocaleString()}</strong>). Desviación: <strong>${diff.toLocaleString()}</strong>.
-                          </p>
-                        </div>
-                      );
-                    }
-                    return null;
-                  })}
-
-                  {/* Alertas de APU Faltantes en ítems ejecutados */}
-                  {contractItems.map(bi => {
-                    const executedQty = getExecutedQty(bi.item);
-                    const hasApu = activityAPUs.some(a => a.itemCode === bi.item);
-                    
-                    if (executedQty > 0 && !hasApu) {
-                      return (
-                        <div key={bi.item} style={{
-                          border: '1px solid hsl(var(--warning))', background: 'rgba(255,170,0,0.05)',
-                          padding: '10px', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem'
-                        }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'hsl(var(--warning))', fontWeight: 'bold', marginBottom: '4px' }}>
-                            <AlertTriangle size={14} />
-                            <span>APU FALTANTE</span>
-                          </div>
-                          <p style={{ color: 'hsl(var(--text-secondary))', fontSize: '0.7rem' }}>
-                            La actividad <strong>{bi.item}</strong> ya registra avance ejecutado (<strong>{executedQty} {bi.unidad}</strong>) pero no tiene un APU estructurado para estimar su costo teórico.
-                          </p>
-                        </div>
-                      );
-                    }
-                    return null;
-                  })}
-
-                  {/* Estado Saludable */}
-                  {financialSummary.executedIncome > 0 && financialSummary.marginReal >= 0 && (
-                    <div style={{
-                      border: '1px solid hsl(var(--success))', background: 'rgba(0,255,100,0.05)',
-                      padding: '10px', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem',
-                      display: 'flex', alignItems: 'flex-start', gap: '8px'
-                    }}>
-                      <Check size={16} style={{ color: 'hsl(var(--success))', flexShrink: 0 }} />
-                      <div>
-                        <strong style={{ color: 'hsl(var(--success))', display: 'block', marginBottom: '2px' }}>
-                          PROYECTO FINANCIERAMENTE SANO
-                        </strong>
-                        <span style={{ fontSize: '0.7rem', color: 'hsl(var(--text-secondary))' }}>
-                          Los egresos reales están dentro de los márgenes presupuestados de la facturación ejecutada. Margen del {Math.round(financialSummary.marginPercent)}%.
-                        </span>
-                      </div>
+                  {/* Columna Izquierda: LO QUE NOS PAGAN (Contrato / APU) */}
+                  <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 'var(--spacing-md)', minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px', marginBottom: '12px', flexShrink: 0 }}>
+                      <h3 style={{ fontSize: '0.85rem', textTransform: 'uppercase', fontFamily: 'var(--font-technical)', margin: 0 }}>
+                        LO QUE NOS PAGAN (CONTRATO)
+                      </h3>
+                      <span className="badge badge-success" style={{ fontSize: '0.65rem' }}>Pactado</span>
                     </div>
-                  )}
 
-                  {financialSummary.executedIncome === 0 && (
-                    <div style={{ padding: '20px', textAlign: 'center', fontSize: '0.75rem', color: 'hsl(var(--text-muted))' }}>
-                      No hay avance físico reportado en el proyecto para generar análisis de desviaciones de consumos.
+                    {/* Resumen del Item */}
+                    {(() => {
+                      const bi = contractItems.find(item => item.item === selectedControlItemCode);
+                      if (!bi) return null;
+                      const executedQty = getExecutedQty(bi.item);
+                      const apu = activityAPUs.find(a => a.itemCode === bi.item);
+                      const apuUnitCost = apu 
+                        ? apu.materials.reduce((acc, r) => acc + r.total, 0) +
+                          apu.labor.reduce((acc, r) => acc + r.total, 0) +
+                          apu.equipment.reduce((acc, r) => acc + r.total, 0) +
+                          apu.transport.reduce((acc, r) => acc + r.total, 0)
+                        : 0;
+                      const apuTotalCost = executedQty * apuUnitCost;
+                      const contractTotalVal = executedQty * bi.vlrUnitario;
+
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+                          <div style={{ 
+                            display: 'grid', 
+                            gridTemplateColumns: '1fr 1fr', 
+                            gap: '12px', 
+                            background: 'hsla(var(--bg-tertiary), 0.3)',
+                            padding: '12px',
+                            borderRadius: '6px',
+                            border: '1px solid var(--border-color)',
+                            marginBottom: '12px',
+                            fontSize: '0.75rem',
+                            flexShrink: 0
+                          }}>
+                            <div>
+                              <div style={{ color: 'hsl(var(--text-secondary))', fontWeight: 'bold' }}>{bi.item} - {bi.descripcion}</div>
+                              <div style={{ marginTop: '4px', fontSize: '0.7rem', color: 'hsl(var(--text-muted))' }}>
+                                Cantidad Contrato: <strong>{bi.cantidad.toLocaleString()} {bi.unidad}</strong>
+                              </div>
+                              <div style={{ fontSize: '0.7rem', color: 'hsl(var(--text-muted))' }}>
+                                Cantidad Ejecutada (Avance): <strong style={{ color: 'hsl(var(--accent-primary))' }}>{executedQty.toLocaleString()} {bi.unidad}</strong>
+                              </div>
+                            </div>
+                            <div style={{ textAlign: 'right' }}>
+                              <div>Tarifa de Venta: <strong>${bi.vlrUnitario.toLocaleString()}</strong></div>
+                              <div style={{ marginTop: '2px', color: 'hsl(var(--text-secondary))' }}>
+                                Total Cobrado (Venta): <strong>${contractTotalVal.toLocaleString()}</strong>
+                              </div>
+                              <div style={{ color: 'hsl(var(--primary-neon))' }}>
+                                Costo APU Teórico Total: <strong>${apuTotalCost.toLocaleString()}</strong>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Listado de Insumos Teóricos */}
+                          <h4 style={{ fontSize: '0.7rem', color: 'hsl(var(--text-muted))', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '8px', flexShrink: 0 }}>
+                            Análisis de Precios Unitarios (APU Teórico)
+                          </h4>
+
+                          <div className="floating-scroll" style={{ flex: 1, minHeight: 0 }}>
+                            {!apu ? (
+                              <div style={{ padding: '20px', textAlign: 'center', color: 'hsl(var(--text-muted))', fontSize: '0.75rem' }}>
+                                Esta actividad no tiene un APU configurado.
+                              </div>
+                            ) : (
+                              <table className="data-table" style={{ fontSize: '0.7rem' }}>
+                                <thead>
+                                  <tr>
+                                    <th>Insumo (APU)</th>
+                                    <th style={{ width: '15%', textAlign: 'center' }}>Unidad</th>
+                                    <th style={{ width: '20%', textAlign: 'right' }}>Rend/Cant</th>
+                                    <th style={{ width: '20%', textAlign: 'right' }}>Precio Teórico</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {(['materials', 'labor', 'equipment', 'transport'] as const).map(cat => {
+                                    const list = apu[cat] || [];
+                                    if (list.length === 0) return null;
+                                    const catTitle = cat === 'materials' ? 'Materiales' : cat === 'labor' ? 'Mano de Obra' : cat === 'equipment' ? 'Equipos' : 'Transporte';
+
+                                    return (
+                                      <Fragment key={cat}>
+                                        <tr key={cat}>
+                                          <td colSpan={4} style={{
+                                            background: 'hsla(var(--accent-primary-hsl), 0.05)',
+                                            color: 'hsl(var(--accent-primary))',
+                                            fontWeight: 'bold',
+                                            fontSize: '0.65rem',
+                                            textTransform: 'uppercase',
+                                            padding: '4px 8px'
+                                          }}>
+                                            {catTitle}
+                                          </td>
+                                        </tr>
+                                        {list.map((item, idx) => (
+                                          <tr key={`${cat}-${idx}`}>
+                                            <td style={{ paddingLeft: '12px' }}>{item.description}</td>
+                                            <td className="cell-center">{item.unit}</td>
+                                            <td className="cell-right">{item.quantity.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 4 })}</td>
+                                            <td className="cell-right">${item.price.toLocaleString()}</td>
+                                          </tr>
+                                        ))}
+                                      </Fragment>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Columna Derecha: LO QUE PAGAMOS (Compras Bitácora) */}
+                  <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 'var(--spacing-md)', minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px', marginBottom: '12px', flexShrink: 0 }}>
+                      <h3 style={{ fontSize: '0.85rem', textTransform: 'uppercase', fontFamily: 'var(--font-technical)', margin: 0 }}>
+                        LO QUE PAGAMOS (BITÁCORA REAL)
+                      </h3>
+                      <span className="badge badge-warning" style={{ fontSize: '0.65rem' }}>Egresos</span>
                     </div>
-                  )}
+
+                    {(() => {
+                      const bi = contractItems.find(item => item.item === selectedControlItemCode);
+                      if (!bi) return null;
+                      const executedQty = getExecutedQty(bi.item);
+                      const apu = activityAPUs.find(a => a.itemCode === bi.item);
+                      const apuUnitCost = apu 
+                        ? apu.materials.reduce((acc, r) => acc + r.total, 0) +
+                          apu.labor.reduce((acc, r) => acc + r.total, 0) +
+                          apu.equipment.reduce((acc, r) => acc + r.total, 0) +
+                          apu.transport.reduce((acc, r) => acc + r.total, 0)
+                        : 0;
+                      const apuTotalCost = executedQty * apuUnitCost;
+
+                      // Costo real del APU calculado con compras del catálogo
+                      const realUnitCost = selectedRealAPU ? selectedRealAPU.totalRealUnit : 0;
+                      const realTotalCost = executedQty * realUnitCost;
+
+                      const diffVal = apuTotalCost - realTotalCost; // Ahorro proyectado vs APU teórico
+                      const deviationPercent = apuTotalCost > 0 ? (Math.abs(diffVal) / apuTotalCost) * 100 : 0;
+
+                      // Obtener compras reales de esta actividad para mostrar abajo en bitácora
+                      const txs = costTransactions.filter(t => t.itemCode === selectedControlItemCode);
+
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+                          {/* Resumen del Gasto Real */}
+                          <div style={{ 
+                            display: 'grid', 
+                            gridTemplateColumns: '1fr 1fr', 
+                            gap: '12px', 
+                            background: 'hsla(var(--bg-tertiary), 0.3)',
+                            padding: '12px',
+                            borderRadius: '6px',
+                            border: '1px solid var(--border-color)',
+                            marginBottom: '12px',
+                            fontSize: '0.75rem',
+                            flexShrink: 0
+                          }}>
+                            <div>
+                              <div>Costo Real Proyectado: <strong style={{ fontSize: '0.85rem', color: realTotalCost > apuTotalCost ? 'hsl(var(--danger))' : 'hsl(var(--success))' }}>${Math.round(realTotalCost).toLocaleString()}</strong></div>
+                              <div style={{ marginTop: '4px', fontSize: '0.7rem', color: 'hsl(var(--text-muted))' }}>
+                                Costo Unitario Real: <strong>${Math.round(realUnitCost).toLocaleString()}</strong>
+                              </div>
+                            </div>
+                            <div style={{ textAlign: 'right' }}>
+                              <div style={{ color: 'hsl(var(--text-muted))' }}>Diferencia vs APU Teórico:</div>
+                              <div style={{ 
+                                fontSize: '0.9rem', 
+                                fontWeight: 'bold', 
+                                color: diffVal >= 0 ? 'hsl(var(--success))' : 'hsl(var(--danger))' 
+                              }}>
+                                {diffVal >= 0 ? 'Ahorro: +' : 'Exceso: -'}${Math.round(Math.abs(diffVal)).toLocaleString()} ({Math.round(deviationPercent)}%)
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Listado de Insumos con Precios Reales de Compra (APU Realizado) */}
+                          <h4 style={{ fontSize: '0.7rem', color: 'hsl(var(--text-muted))', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '8px', flexShrink: 0 }}>
+                            Análisis de Precios Unitarios Real (APU Ejecutado)
+                          </h4>
+
+                          <div className="floating-scroll" style={{ flex: 1, minHeight: 0, marginBottom: '12px' }}>
+                            {!selectedRealAPU ? (
+                              <div style={{ padding: '20px', textAlign: 'center', color: 'hsl(var(--text-muted))', fontSize: '0.75rem' }}>
+                                Esta actividad no tiene compras asociadas en el catálogo.
+                              </div>
+                            ) : (
+                              <table className="data-table" style={{ fontSize: '0.7rem' }}>
+                                <thead>
+                                  <tr>
+                                    <th>Insumo</th>
+                                    <th style={{ width: '10%', textAlign: 'center' }}>Unidad</th>
+                                    <th style={{ width: '15%', textAlign: 'right' }}>Cant/Rend</th>
+                                    <th style={{ width: '20%', textAlign: 'right' }}>Precio Real</th>
+                                    <th style={{ width: '20%', textAlign: 'right' }}>Costo Real</th>
+                                    <th style={{ width: '15%', textAlign: 'right' }}>Var vs Teo</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {(['materials', 'labor', 'equipment', 'transport'] as const).map(cat => {
+                                    const list = selectedRealAPU.details[cat] || [];
+                                    if (list.length === 0) return null;
+                                    const catTitle = cat === 'materials' ? 'Materiales' : cat === 'labor' ? 'Mano de Obra' : cat === 'equipment' ? 'Equipos' : 'Transporte';
+
+                                    return (
+                                      <Fragment key={cat}>
+                                        <tr>
+                                          <td colSpan={6} style={{
+                                            background: 'hsla(var(--accent-primary-hsl), 0.05)',
+                                            color: 'hsl(var(--accent-primary))',
+                                            fontWeight: 'bold',
+                                            fontSize: '0.65rem',
+                                            textTransform: 'uppercase',
+                                            padding: '4px 8px'
+                                          }}>
+                                            {catTitle}
+                                          </td>
+                                        </tr>
+                                        {list.map((item, idx) => (
+                                          <tr key={`${cat}-${idx}`}>
+                                            <td style={{ paddingLeft: '12px' }}>{item.description}</td>
+                                            <td className="cell-center">{item.unit}</td>
+                                            <td className="cell-right">{item.quantity.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 4 })}</td>
+                                            <td className="cell-right">
+                                              {item.realPrice > 0 ? `$${Math.round(item.realPrice).toLocaleString()}` : <span style={{ color: 'hsl(var(--text-muted))', fontStyle: 'italic' }}>$0 (Sin compras)</span>}
+                                            </td>
+                                            <td className="cell-right">${Math.round(item.realTotal).toLocaleString()}</td>
+                                            <td className="cell-right" style={{ 
+                                              color: item.diff > 1.0 ? 'hsl(var(--danger))' : item.realPrice > 0 ? 'hsl(var(--success))' : 'inherit',
+                                              fontWeight: 'bold'
+                                            }}>
+                                              {item.diff === 0 ? '$0' : (item.diff > 0 ? '▲ +' : '▼ -') + '$' + Math.abs(Math.round(item.diff)).toLocaleString()}
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </Fragment>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            )}
+                          </div>
+
+                          {/* Listado de Compras Físicas Directas de esta Actividad */}
+                          <h4 style={{ fontSize: '0.7rem', color: 'hsl(var(--text-muted))', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '8px', flexShrink: 0 }}>
+                            Egresos Físicos Directos en Bitácora ({txs.length})
+                          </h4>
+
+                          <div className="floating-scroll" style={{ height: '120px', flexShrink: 0, border: '1px solid var(--border-color)', borderRadius: '4px', padding: '6px', background: 'hsla(var(--bg-tertiary), 0.1)', paddingBottom: '24px' }}>
+                            {txs.length === 0 ? (
+                              <div style={{ padding: '15px', textAlign: 'center', color: 'hsl(var(--text-muted))', fontSize: '0.75rem', fontStyle: 'italic' }}>
+                                No se han registrado egresos directos en bitácora para esta actividad.
+                              </div>
+                            ) : (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                {txs.map(tx => (
+                                  <div key={tx.id} style={{
+                                    padding: '8px 10px',
+                                    background: 'hsla(var(--bg-tertiary), 0.3)',
+                                    borderRadius: '4px',
+                                    border: '1px solid var(--border-color)',
+                                    fontSize: '0.7rem',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '4px'
+                                  }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', borderBottom: '1px solid rgba(255,255,255,0.04)', paddingBottom: '2px' }}>
+                                      <span style={{ color: 'hsl(var(--accent-primary))' }}>{tx.description}</span>
+                                      <span style={{ color: 'hsl(var(--text-muted))' }}>{tx.date}</span>
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'hsl(var(--text-secondary))' }}>
+                                      <span>Cantidad: <strong>{tx.quantity.toLocaleString()}</strong></span>
+                                      <span>Precio Unit: <strong>${tx.unitPrice.toLocaleString()}</strong></span>
+                                      <span style={{ color: 'hsl(var(--primary-neon))' }}>Total: <strong>${tx.totalPrice.toLocaleString()}</strong></span>
+                                    </div>
+                                    {(tx.provider || tx.invoiceNumber) && (
+                                      <div style={{ display: 'flex', gap: '15px', fontSize: '0.65rem', color: 'hsl(var(--text-muted))', marginTop: '1px' }}>
+                                        {tx.provider && <span>Prov: {tx.provider}</span>}
+                                        {tx.invoiceNumber && <span>Soporte: {tx.invoiceNumber}</span>}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
 
                 </div>
-              </div>
+              ) : (
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'hsl(var(--text-muted))', fontSize: '0.85rem' }}>
+                  Seleccione una actividad de la lista de búsqueda superior para iniciar la comparación.
+                </div>
+              )
+            ) : (
+              // COMPARATIVO POR INSUMO
+              selectedCompareResId ? (
+                <div style={{ display: 'flex', gap: '16px', flex: 1, minHeight: 0 }}>
+                  
+                  {/* Columna Izquierda: LO QUE NOS PAGAN (Tarifa APU Pactada) */}
+                  <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 'var(--spacing-md)', minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px', marginBottom: '12px', flexShrink: 0 }}>
+                      <h3 style={{ fontSize: '0.85rem', textTransform: 'uppercase', fontFamily: 'var(--font-technical)', margin: 0 }}>
+                        LO QUE NOS PAGAN (TARIFA APU)
+                      </h3>
+                      <span className="badge badge-success" style={{ fontSize: '0.65rem' }}>Contrato</span>
+                    </div>
 
-            </div>
+                    {(() => {
+                      const selectedRes = costResources.find(r => r.id === selectedCompareResId);
+                      if (!selectedRes) return null;
 
+                      // Encontrar actividades que usan este insumo
+                      const activitiesUsingRes = contractItems.filter(bi => {
+                        const apu = activityAPUs.find(a => a.itemCode === bi.item);
+                        if (!apu) return false;
+                        return (['materials', 'labor', 'equipment', 'transport'] as const).some(cat => 
+                          (apu[cat] || []).some(r => r.description.trim().toLowerCase() === selectedRes.description.trim().toLowerCase())
+                        );
+                      });
+
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+                          <div style={{ 
+                            display: 'flex', 
+                            flexDirection: 'column',
+                            gap: '8px', 
+                            background: 'hsla(var(--bg-tertiary), 0.3)',
+                            padding: '12px',
+                            borderRadius: '6px',
+                            border: '1px solid var(--border-color)',
+                            marginBottom: '12px',
+                            fontSize: '0.75rem',
+                            flexShrink: 0
+                          }}>
+                            <div>
+                              <strong style={{ color: 'hsl(var(--accent-primary))', marginRight: '6px' }}>[{selectedRes.code}]</strong>
+                              <strong>{selectedRes.description}</strong>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
+                              <span>Unidad: <strong>{selectedRes.unit}</strong></span>
+                              <span>Tipo: <strong style={{ textTransform: 'capitalize' }}>{selectedRes.type}</strong></span>
+                              <span>Precio Pactado APU: <strong style={{ color: 'hsl(var(--primary-neon))' }}>${selectedRes.referencePrice.toLocaleString()}</strong></span>
+                            </div>
+                          </div>
+
+                          <h4 style={{ fontSize: '0.7rem', color: 'hsl(var(--text-muted))', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '8px', flexShrink: 0 }}>
+                            Actividades que planifican este insumo:
+                          </h4>
+
+                          <div className="floating-scroll" style={{ flex: 1, minHeight: 0 }}>
+                            {activitiesUsingRes.length === 0 ? (
+                              <div style={{ padding: '20px', textAlign: 'center', color: 'hsl(var(--text-muted))', fontSize: '0.75rem' }}>
+                                Este insumo no está planificado en ningún APU del contrato.
+                              </div>
+                            ) : (
+                              <table className="data-table" style={{ fontSize: '0.7rem' }}>
+                                <thead>
+                                  <tr>
+                                    <th>Actividad</th>
+                                    <th>Descripción Actividad</th>
+                                    <th style={{ textAlign: 'right' }}>Rend. Teórico</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {activitiesUsingRes.map(bi => {
+                                    const apu = activityAPUs.find(a => a.itemCode === bi.item);
+                                    let qty = 0;
+                                    if (apu) {
+                                      (['materials', 'labor', 'equipment', 'transport'] as const).forEach(cat => {
+                                        const found = (apu[cat] || []).find(r => r.description.trim().toLowerCase() === selectedRes.description.trim().toLowerCase());
+                                        if (found) qty = found.quantity;
+                                      });
+                                    }
+
+                                    return (
+                                      <tr key={bi.item}>
+                                        <td><strong style={{ color: 'hsl(var(--accent-primary))' }}>{bi.item}</strong></td>
+                                        <td>{bi.descripcion}</td>
+                                        <td className="cell-right">{qty.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 4 })}</td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Columna Derecha: LO QUE PAGAMOS (Compras Bitácora) */}
+                  <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 'var(--spacing-md)', minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px', marginBottom: '12px', flexShrink: 0 }}>
+                      <h3 style={{ fontSize: '0.85rem', textTransform: 'uppercase', fontFamily: 'var(--font-technical)', margin: 0 }}>
+                        LO QUE PAGAMOS (COMPRAS REALES)
+                      </h3>
+                      <span className="badge badge-warning" style={{ fontSize: '0.65rem' }}>Compras</span>
+                    </div>
+
+                    {(() => {
+                      const selectedRes = costResources.find(r => r.id === selectedCompareResId);
+                      if (!selectedRes) return null;
+
+                      const txs = costTransactions.filter(t => t.resourceId === selectedRes.id || t.description.trim().toLowerCase() === selectedRes.description.trim().toLowerCase());
+                      const totalQty = txs.reduce((sum, t) => sum + t.quantity, 0);
+                      const totalValue = txs.reduce((sum, t) => sum + t.totalPrice, 0);
+                      const avgRealPrice = totalQty > 0 ? totalValue / totalQty : 0;
+                      const diffPrice = avgRealPrice > 0 ? avgRealPrice - selectedRes.referencePrice : 0;
+                      const diffPercent = selectedRes.referencePrice > 0 ? (Math.abs(diffPrice) / selectedRes.referencePrice) * 100 : 0;
+
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+                          {/* Resumen de Compras del Insumo */}
+                          <div style={{ 
+                            display: 'grid', 
+                            gridTemplateColumns: '1fr 1fr', 
+                            gap: '12px', 
+                            background: 'hsla(var(--bg-tertiary), 0.3)',
+                            padding: '12px',
+                            borderRadius: '6px',
+                            border: '1px solid var(--border-color)',
+                            marginBottom: '12px',
+                            fontSize: '0.75rem',
+                            flexShrink: 0
+                          }}>
+                            <div>
+                              <div>Precio Prom. Compra: <strong style={{ fontSize: '0.85rem', color: diffPrice > 1.0 ? 'hsl(var(--danger))' : avgRealPrice > 0 ? 'hsl(var(--success))' : 'inherit' }}>
+                                {avgRealPrice > 0 ? `$${Math.round(avgRealPrice).toLocaleString()}` : 'Sin compras'}
+                              </strong></div>
+                              <div style={{ marginTop: '4px', fontSize: '0.7rem', color: 'hsl(var(--text-muted))' }}>
+                                Cantidad Comprada: <strong>{totalQty.toLocaleString()} {selectedRes.unit}</strong>
+                              </div>
+                            </div>
+                            <div style={{ textAlign: 'right' }}>
+                              <div>Total Gastado Insumo: <strong>${totalValue.toLocaleString()}</strong></div>
+                              {avgRealPrice > 0 && (
+                                <div style={{ 
+                                  marginTop: '2px',
+                                  fontSize: '0.75rem',
+                                  fontWeight: 'bold',
+                                  color: diffPrice > 1.0 ? 'hsl(var(--danger))' : 'hsl(var(--success))' 
+                                }}>
+                                  {diffPrice > 1.0 ? 'Exceso: +' : 'Ahorro: -'}${Math.round(Math.abs(diffPrice)).toLocaleString()} ({Math.round(diffPercent)}%)
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <h4 style={{ fontSize: '0.7rem', color: 'hsl(var(--text-muted))', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '8px', flexShrink: 0 }}>
+                            Historial de Compras de este Insumo
+                          </h4>
+
+                          <div className="floating-scroll" style={{ flex: 1, minHeight: 0, paddingBottom: '24px' }}>
+                            {txs.length === 0 ? (
+                              <div style={{ padding: '20px', textAlign: 'center', color: 'hsl(var(--text-muted))', fontSize: '0.75rem', fontStyle: 'italic' }}>
+                                No se han registrado transacciones de compra para este insumo.
+                              </div>
+                            ) : (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                {txs.map(tx => {
+                                  const diff = tx.unitPrice - selectedRes.referencePrice;
+                                  const percentDiff = selectedRes.referencePrice > 0 ? (diff / selectedRes.referencePrice) * 100 : 0;
+
+                                  return (
+                                    <div key={tx.id} style={{
+                                      padding: '10px 12px',
+                                      background: 'hsla(var(--bg-tertiary), 0.3)',
+                                      borderRadius: '4px',
+                                      border: '1px solid var(--border-color)',
+                                      fontSize: '0.7rem',
+                                      display: 'flex',
+                                      flexDirection: 'column',
+                                      gap: '6px'
+                                    }}>
+                                      <div style={{ display: 'flex', justifySelf: 'stretch', justifyContent: 'space-between', fontWeight: 'bold', borderBottom: '1px solid rgba(255,255,255,0.04)', paddingBottom: '4px' }}>
+                                        <span style={{ color: 'hsl(var(--accent-primary))' }}>Act: {tx.itemCode}</span>
+                                        <span style={{ color: 'hsl(var(--text-muted))' }}>{tx.date}</span>
+                                      </div>
+                                      
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', color: 'hsl(var(--text-secondary))' }}>
+                                        <div>Detalle: <strong>{tx.description}</strong></div>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '2px' }}>
+                                          <span>Cant: <strong>{tx.quantity.toLocaleString()}</strong></span>
+                                          <span>Unit: <strong>${tx.unitPrice.toLocaleString()}</strong></span>
+                                          <span style={{ color: 'hsl(var(--primary-neon))' }}>Total: <strong>${tx.totalPrice.toLocaleString()}</strong></span>
+                                        </div>
+                                      </div>
+
+                                      {Math.abs(diff) > 1.0 && (
+                                        <div style={{
+                                          marginTop: '4px',
+                                          paddingTop: '4px',
+                                          borderTop: '1px solid rgba(255,255,255,0.05)',
+                                          color: diff > 0 ? 'hsl(var(--danger))' : 'hsl(var(--success))',
+                                          fontWeight: 'bold',
+                                          fontSize: '0.65rem',
+                                          display: 'flex',
+                                          justifyContent: 'space-between'
+                                        }}>
+                                          <span>VAR. PRECIO UNIT:</span>
+                                          <span>{diff > 0 ? '▲ +' : '▼ -'}${Math.abs(Math.round(diff)).toLocaleString()} ({Math.round(Math.abs(percentDiff))}%)</span>
+                                        </div>
+                                      )}
+
+                                      {(tx.provider || tx.invoiceNumber) && (
+                                        <div style={{ display: 'flex', gap: '12px', fontSize: '0.65rem', color: 'hsl(var(--text-muted))', marginTop: '2px' }}>
+                                          {tx.provider && <span>Prov: {tx.provider}</span>}
+                                          {tx.invoiceNumber && <span>Soporte: {tx.invoiceNumber}</span>}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                </div>
+              ) : (
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'hsl(var(--text-muted))', fontSize: '0.85rem' }}>
+                  Seleccione un insumo de la lista de búsqueda superior para iniciar la comparación.
+                </div>
+              )
+            )}
           </div>
         )}
 

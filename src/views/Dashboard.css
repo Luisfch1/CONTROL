@@ -61,7 +61,7 @@
   color: hsl(var(--text-primary));
   letter-spacing: 0.05em;
   padding-bottom: 4px;
-  border-bottom: 3px solid #bef264;
+  border-bottom: 3px solid hsl(var(--primary-neon));
   /* Lime technical line */
   display: inline-block;
   margin: 0;
@@ -198,7 +198,7 @@
 [data-theme="light"] .nav-item.active {
   color: #000 !important;
   background: rgba(255, 255, 255, 0.4) !important;
-  border-right: 3px solid #bef264 !important;
+  border-right: 3px solid hsl(var(--primary-neon)) !important;
 }
 
 .progress-bar-bg {
@@ -218,7 +218,7 @@
 .dash-panel-content.split-layout {
   display: grid;
   grid-template-rows: 1fr 1fr;
-  gap: 24px;
+  gap: 12px;
   padding: 10px 20px;
   height: 100%;
 }
@@ -319,8 +319,9 @@
   left: 0;
   width: 100%;
   height: 2px;
-  background: #ec4899;
-  /* Pink accent */
+  background: hsl(var(--alert-orange-hsl));
+  box-shadow: 0 0 6px hsla(var(--alert-orange-hsl), 0.5);
+  /* Danger/Alert accent */
 }
 
 /* Technical Lists */
@@ -344,20 +345,19 @@
   color: hsl(var(--text-primary));
   margin-bottom: 12px;
   padding-bottom: 4px;
-  border-bottom: 1px solid #ec4899;
-  /* Critical - Pink */
   display: flex;
   justify-content: space-between;
 }
 
-.tech-list-title.upcoming {
-  border-bottom: 1px solid #bef264;
-  /* Upcoming - Lime */
+.tech-list-title.critical {
+  border-bottom: 1px solid hsl(var(--alert-orange-hsl));
+  box-shadow: 0 1px 4px hsla(var(--alert-orange-hsl), 0.35);
 }
 
 .tech-list-title.upcoming {
-  border-bottom: 1px solid #bef264;
-  /* Upcoming - Yellow */
+  border-bottom: 1px solid hsl(var(--primary-neon));
+  box-shadow: 0 1px 4px hsla(var(--primary-neon-hsl), 0.35);
+  /* Upcoming - Brand Accent Highlight */
 }
 
 .tech-list-item {
@@ -477,4 +477,23 @@
 .system-time {
   font-size: 0.65rem;
   color: hsl(var(--text-secondary));
+}
+
+.dash-close-btn {
+  background: none;
+  border: none;
+  color: hsla(var(--text-primary), 0.35);
+  cursor: pointer;
+  font-size: 1.25rem;
+  margin-left: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  line-height: 1;
+}
+
+.dash-close-btn:hover {
+  color: hsl(var(--text-primary));
+  transform: scale(1.15);
 }

@@ -9,7 +9,7 @@
   --bg-primary: 222 47% 2%;
   --bg-secondary: 222 47% 4%;
   --bg-tertiary: 222 47% 10%;
-  --bg-image: url("./assets/bg_dark.png");
+  --bg-image: url("./assets/fondo_control.png");
 
   --glass-opacity: 0.05;
   --glass-opacity-card: 0.2;
@@ -25,6 +25,8 @@
   --success: 142 80% 50%;
   --warning: 40 100% 60%;
   --danger: 340 90% 60%;
+  --alert-orange-hsl: 25 100% 55%;
+  --alert-orange: var(--alert-orange-hsl);
 
   --border-color: hsla(0, 0%, 100%, 0.15);
   --glass-blur: blur(20px);
@@ -210,6 +212,8 @@ textarea {
   padding: var(--spacing-md) 0;
   overflow-y: auto;
   scrollbar-width: none;
+  display: flex;
+  flex-direction: column;
 }
 
 .nav-item {

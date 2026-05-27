@@ -26,6 +26,7 @@ import AgentPanel from './views/AgentPanel';
 import PhotoReportsView from './views/PhotoReportsView';
 import CorrespondenceView from './views/CorrespondenceView';
 import CostsView from './views/CostsView';
+import AgentConfigModal from './views/AgentConfigModal';
 import logo from './assets/logo.png';
 
 type ViewState = 'dashboard' | 'budget' | 'schedule' | 'progress' | 'photos' | 'reports' | 'parciales' | 'analytics' | 'create-project' | 'edit-project' | 'photo-reports' | 'correspondence' | 'costs';
@@ -107,6 +108,7 @@ function App() {
   const [auditLogs, setAuditLogs] = useState<ApiAuditLog[]>([]);
   const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
   const [selectedAuditLog, setSelectedAuditLog] = useState<ApiAuditLog | null>(null);
+  const [isAgentConfigOpen, setIsAgentConfigOpen] = useState(false);
 
   useEffect(() => {
     const handleUpdate = () => {
@@ -875,9 +877,6 @@ function App() {
                 className={`nav-item ${currentView === 'analytics' ? 'active' : ''}`}
                 onClick={() => setCurrentView('analytics')}
                 style={{
-                  marginTop: 'var(--spacing-md)',
-                  borderTop: '1px solid hsla(var(--border-color), 0.3)',
-                  paddingTop: 'var(--spacing-md)',
                   color: 'hsl(var(--primary-neon))'
                 }}
               >
@@ -902,99 +901,13 @@ function App() {
                 <span>Correspondencia</span>
               </div>
 
-              {/* COSTOS Collapsible Item */}
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <div
-                  className={`nav-item ${currentView === 'costs' ? 'active' : ''}`}
-                  onClick={() => {
-                    setCurrentView('costs');
-                    setIsCostsMenuExpanded(!isCostsMenuExpanded);
-                  }}
-                  style={{ 
-                    display: 'flex', 
-                    justifyContent: 'space-between', 
-                    alignItems: 'center', 
-                    width: '100%', 
-                    paddingRight: 'var(--spacing-lg)' 
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-md)' }}>
-                    <DollarSign size={20} />
-                    <span>Costos</span>
-                  </div>
-                  {isCostsMenuExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                </div>
-
-                {isCostsMenuExpanded && (
-                  <div style={{
-                    paddingLeft: '12px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '2px',
-                    marginTop: '2px',
-                    borderLeft: '1px solid hsla(var(--border-color), 0.2)',
-                    marginLeft: '36px',
-                    marginBottom: '8px'
-                  }}>
-                    <div
-                      className="nav-item"
-                      style={{
-                        padding: '6px 12px',
-                        fontSize: '0.75rem',
-                        textTransform: 'none',
-                        letterSpacing: 'normal',
-                        gap: '6px',
-                        color: currentView === 'costs' && costsActiveTab === 'contract' ? 'hsl(var(--primary-neon))' : 'hsl(var(--text-secondary))',
-                        background: currentView === 'costs' && costsActiveTab === 'contract' ? 'hsla(var(--primary-neon-hsl), 0.08)' : 'transparent',
-                        borderLeft: currentView === 'costs' && costsActiveTab === 'contract' ? '2px solid hsl(var(--primary-neon))' : 'none'
-                      }}
-                      onClick={() => {
-                        setCurrentView('costs');
-                        setCostsActiveTab('contract');
-                      }}
-                    >
-                      <span>📊 Contrato (Venta)</span>
-                    </div>
-                    <div
-                      className="nav-item"
-                      style={{
-                        padding: '6px 12px',
-                        fontSize: '0.75rem',
-                        textTransform: 'none',
-                        letterSpacing: 'normal',
-                        gap: '6px',
-                        color: currentView === 'costs' && costsActiveTab === 'operation' ? 'hsl(var(--primary-neon))' : 'hsl(var(--text-secondary))',
-                        background: currentView === 'costs' && costsActiveTab === 'operation' ? 'hsla(var(--primary-neon-hsl), 0.08)' : 'transparent',
-                        borderLeft: currentView === 'costs' && costsActiveTab === 'operation' ? '2px solid hsl(var(--primary-neon))' : 'none'
-                      }}
-                      onClick={() => {
-                        setCurrentView('costs');
-                        setCostsActiveTab('operation');
-                      }}
-                    >
-                      <span>🛒 Mis Costos (Operación)</span>
-                    </div>
-                    <div
-                      className="nav-item"
-                      style={{
-                        padding: '6px 12px',
-                        fontSize: '0.75rem',
-                        textTransform: 'none',
-                        letterSpacing: 'normal',
-                        gap: '6px',
-                        color: currentView === 'costs' && costsActiveTab === 'control' ? 'hsl(var(--primary-neon))' : 'hsl(var(--text-secondary))',
-                        background: currentView === 'costs' && costsActiveTab === 'control' ? 'hsla(var(--primary-neon-hsl), 0.08)' : 'transparent',
-                        borderLeft: currentView === 'costs' && costsActiveTab === 'control' ? '2px solid hsl(var(--primary-neon))' : 'none'
-                      }}
-                      onClick={() => {
-                        setCurrentView('costs');
-                        setCostsActiveTab('control');
-                      }}
-                    >
-                      <span>🚨 Control Financiero</span>
-                    </div>
-                  </div>
-                )}
+              {/* COSTOS Item */}
+              <div
+                className={`nav-item ${currentView === 'costs' ? 'active' : ''}`}
+                onClick={() => setCurrentView('costs')}
+              >
+                <DollarSign size={20} />
+                <span>Costos</span>
               </div>
             </>
           )}
@@ -1061,30 +974,7 @@ function App() {
                   <Bot size={20} className="agent-status-bot-icon" />
                   <span>AGENTE IA</span>
 
-                  {/* Chulito de Tarea Terminada */}
-                  {hasUnreadResponse && (
-                    <div style={{
-                      position: 'absolute',
-                      top: '-6px',
-                      left: '12px',
-                      background: 'hsl(var(--primary-neon))',
-                      color: '#000',
-                      borderRadius: '50%',
-                      width: '12px',
-                      height: '12px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '7px',
-                      fontWeight: 'bold',
-                      boxShadow: '0 0 8px hsla(var(--primary-neon-hsl), 0.5)',
-                      border: '1.5px solid hsl(var(--bg-secondary))',
-                      animation: 'popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275)',
-                      zIndex: 10
-                    }}>
-                      <Check size={6} strokeWidth={4} />
-                    </div>
-                  )}
+
 
                   {/* Indicador de "Trabajando" (Pulso) */}
                   {isAgentLoading && (
@@ -1162,6 +1052,29 @@ function App() {
                     title="Auditar llamadas API de CONTROL"
                   >
                     <Terminal size={10} /> AUDITAR
+                  </button>
+
+                  <button
+                    onClick={() => setIsAgentConfigOpen(true)}
+                    style={{
+                      background: 'hsla(var(--primary-neon-hsl), 0.1)',
+                      border: '1px solid hsl(var(--primary-neon))',
+                      color: 'hsl(var(--primary-neon))',
+                      borderRadius: '4px',
+                      padding: '2px 6px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      cursor: 'pointer',
+                      fontSize: '0.55rem',
+                      fontWeight: '800',
+                      fontFamily: 'var(--font-technical)',
+                      transition: 'all 0.2s ease',
+                      boxShadow: '0 0 5px hsla(var(--primary-neon-hsl), 0.15)'
+                    }}
+                    title="Configuración y memoria del Agente IA"
+                  >
+                    <Bot size={10} /> CONFIGURAR
                   </button>
                 </div>
               </div>
@@ -1660,6 +1573,16 @@ function App() {
             </div>
           </div>
         )}
+
+        {/* MODAL DE CONFIGURACIÓN Y MEMORIA DEL AGENTE IA */}
+        <AgentConfigModal
+          isOpen={isAgentConfigOpen}
+          onClose={() => setIsAgentConfigOpen(false)}
+          project={activeProject || null}
+          updateProject={updateProject}
+          globalGeminiKey={globalGeminiKey}
+          setGlobalGeminiKey={setGlobalGeminiKey}
+        />
       </main>
     </div>
   );

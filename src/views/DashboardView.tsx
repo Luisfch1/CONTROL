@@ -234,7 +234,7 @@ export default function DashboardView() {
           <div className="dash-header-meta-section">
             <div className="dash-current-date">FECHA ACTUAL: {format(new Date(), "EEEE, d 'de' MMMM 'de' yyyy", { locale: es }).toUpperCase()}</div>
 
-            <button className="dash-close-btn" onClick={() => closeProject()} style={{ background: 'none', border: 'none', color: 'rgba(0,0,0,0.3)', cursor: 'pointer', fontSize: '1.2rem', marginLeft: '20px' }}>✕</button>
+            <button className="dash-close-btn" onClick={() => closeProject()}>✕</button>
           </div>
         </div>
       </header>
@@ -257,20 +257,21 @@ export default function DashboardView() {
                   <span className="progress-percent">{timePerc.toFixed(1)}%</span>
                 </div>
                 <div className="progress-bar-bg">
-                  <div className="progress-bar-fill" style={{ width: `${timePerc}%`, background: '#bef264', height: '100%' }}></div>
+                  <div className="progress-bar-fill" style={{ width: `${timePerc}%`, background: 'hsl(var(--primary-neon))', height: '100%' }}></div>
                 </div>
               </div>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
-              <RadialStatItem label="AVANCE EJECUTADO" value={executedPerc} color="#4ade80" />
-              <RadialStatItem label="AVANCE PROGRAMADO" value={scheduledPerc} color="#60a5fa" />
-              <RadialStatItem label="AVANCE FINANCIERO" value={financialPerc} color="#fbbf24" />
+              <RadialStatItem label="AVANCE EJECUTADO" value={executedPerc} color="hsl(var(--primary-neon))" />
+              <RadialStatItem label="AVANCE PROGRAMADO" value={scheduledPerc} color="hsl(var(--primary-neon))" />
+              <RadialStatItem label="AVANCE FINANCIERO" value={financialPerc} color="hsl(var(--primary-neon))" />
             </div>
 
               <div style={{ 
                 display: 'inline-block', 
-                borderBottom: `3px solid ${delayPerc > 0 ? '#ec4899' : '#4ade80'}`, 
+                borderBottom: delayPerc > 0 ? '1px solid hsl(var(--alert-orange-hsl))' : '3px solid hsl(var(--primary-neon))', 
+                boxShadow: delayPerc > 0 ? '0 1px 6px hsla(var(--alert-orange-hsl), 0.4)' : 'none',
                 padding: '2px 15px', 
                 fontSize: '0.85rem', 
                 fontWeight: '800', 
@@ -288,19 +289,19 @@ export default function DashboardView() {
             <span>›</span>
           </div>
           <div className="dash-panel-content split-layout">
-            <div className="tech-list-section">
-              <div className="tech-list-title">
+             <div className="tech-list-section">
+              <div className="tech-list-title critical">
                 <span>ÍTEMS CON ATRASO CRÍTICO</span>
               </div>
               <div className="tech-list-scroll">
                 {criticalDelays.length > 0 ? criticalDelays.map((item, idx) => (
                   <div className="tech-list-item" key={idx} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
-                    <div className="tech-item-icon" style={{ width: '10px', height: '10px', backgroundColor: '#ec4899', borderRadius: '2px', flexShrink: 0, marginTop: '4px' }}></div>
+                    <div className="tech-item-icon" style={{ width: '8px', height: '8px', backgroundColor: 'hsl(var(--alert-orange-hsl))', borderRadius: '50%', flexShrink: 0, marginTop: '5px', boxShadow: '0 0 6px hsla(var(--alert-orange-hsl), 0.6)' }}></div>
                     <div style={{ flex: 1 }}>
                       <div className="tech-item-name">{item.code} - {item.name.toUpperCase()}</div>
                       <div className="tech-item-meta">Límite: {item.limit}</div>
                     </div>
-                    <div className="tech-item-status" style={{ color: '#ec4899', fontWeight: 'bold' }}>{item.delay.toFixed(1)}%</div>
+                    <div className="tech-item-status" style={{ color: 'hsl(var(--alert-orange-hsl))', textShadow: '0 0 4px hsla(var(--alert-orange-hsl), 0.3)', fontWeight: 'bold' }}>{item.delay.toFixed(1)}%</div>
                   </div>
                 )) : (
                   <div style={{ fontSize: '0.6rem', color: 'rgba(255,255,255,0.2)', textAlign: 'center', padding: '20px' }}>SIN ATRASOS CRÍTICOS</div>
@@ -308,14 +309,14 @@ export default function DashboardView() {
               </div>
             </div>
 
-            <div className="tech-list-section" style={{ marginTop: '8px' }}>
+            <div className="tech-list-section">
               <div className="tech-list-title upcoming">
                 <span>ACTIVIDADES PRÓXIMA SEMANA</span>
               </div>
               <div className="tech-list-scroll">
                 {upcomingTasks.length > 0 ? upcomingTasks.map((item, idx) => (
                   <div className="tech-list-item" key={idx} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
-                    <div className="tech-item-icon" style={{ width: '10px', height: '10px', backgroundColor: '#bef264', borderRadius: '2px', flexShrink: 0, marginTop: '4px' }}></div>
+                    <div className="tech-item-icon" style={{ width: '10px', height: '10px', backgroundColor: 'hsl(var(--primary-neon))', borderRadius: '2px', flexShrink: 0, marginTop: '4px' }}></div>
                     <div style={{ flex: 1 }}>
                       <div className="tech-item-name">{item.item} - {item.descripcion.toUpperCase()}</div>
                       <div className="tech-item-meta">{item.startDate} / {item.endDate}</div>
@@ -392,13 +393,13 @@ export default function DashboardView() {
             <div className="logi-footer" style={{ marginTop: 'auto', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
               <div className="logi-project-id" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                 <span className="logi-label" style={{ fontSize: '0.45rem', opacity: 0.5 }}>PROYECTO ID</span>
-                <span className="logi-id" style={{ fontSize: '0.6rem', color: '#bef264', fontWeight: 'bold' }}>{project.id.split('-')[0]}...</span>
+                <span className="logi-id" style={{ fontSize: '0.6rem', color: 'hsl(var(--primary-neon))', fontWeight: 'bold' }}>{project.id.split('-')[0]}...</span>
               </div>
               
               <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                 <div className="online-status" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span className="logi-label" style={{ fontSize: '0.6rem', fontWeight: 'bold', color: 'rgba(255,255,255,0.4)' }}>LCHP LOCAL BATCH IMPORT</span>
-                  <div className="online-dot" style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#bef264', boxShadow: '0 0 10px rgba(190, 242, 100, 0.4)' }}></div>
+                  <div className="online-dot" style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'hsl(var(--primary-neon))', boxShadow: '0 0 10px hsla(var(--primary-neon-hsl), 0.4)' }}></div>
                 </div>
               </div>
             </div>

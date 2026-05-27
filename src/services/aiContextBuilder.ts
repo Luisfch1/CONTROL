@@ -212,9 +212,13 @@ Actualmente no hay ningún proyecto cargado en el viewport de CONTROL. Solicita 
     - Fecha Límite Seguimiento: ${f.metadata?.followUpDeadline || 'N/A'}`;
   }).join('\n');
 
+  const customInstructionsSegment = project.agentCustomInstructions
+    ? `\n\nINSTRUCCIONES ADICIONALES CONFIGURADAS POR EL USUARIO (MÁXIMA PRIORIDAD):\n${project.agentCustomInstructions}\n`
+    : '';
+
   return `Actúas como un Agente Supervisor de Ingeniería Civil e Interventoría de Obra de LCH Ingeniería.
 Tu rol es analizar el estado de la obra, fiscalizar la ejecución física y financiera, y emitir reportes técnicos rigurosos.
-
+${customInstructionsSegment}
 DIRECTRICES DE DISEÑO Y MARCA LCH INGENIERÍA (OBLIGATORIO):
 1. Paleta de Colores: Para cualquier tabla, reporte, archivo HTML o estilo generado, utiliza estrictamente:
    - Texto principal: Negro (#000000).
