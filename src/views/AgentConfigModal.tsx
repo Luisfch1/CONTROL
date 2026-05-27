@@ -76,6 +76,9 @@ export default function AgentConfigModal({
   const photosCount = project?.logiEntries?.length || 0;
   const todosCount = project?.agentTodos?.filter(t => !t.completed)?.length || 0;
   const correspondenceCount = project?.correspondenceFiles?.length || 0;
+  const apusCount = project?.activityAPUs?.length || 0;
+  const resourcesCount = project?.costResources?.length || 0;
+  const transactionsCount = project?.costTransactions?.length || 0;
 
   return (
     <div style={{
@@ -366,6 +369,9 @@ export default function AgentConfigModal({
                   <StatPill label="Registro de Fotos" count={`${photosCount} imágenes`} />
                   <StatPill label="Agenda Pendientes" count={`${todosCount} activos`} />
                   <StatPill label="Oficios/Cartas" count={`${correspondenceCount} cargados`} />
+                  <StatPill label="APUs Actividades" count={`${apusCount} cargados`} />
+                  <StatPill label="Insumos (DB)" count={`${resourcesCount} recursos`} />
+                  <StatPill label="Costos Reales" count={`${transactionsCount} transac.`} />
                 </div>
               </div>
 

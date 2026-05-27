@@ -212,6 +212,27 @@ Actualmente no hay ningún proyecto cargado en el viewport de CONTROL. Solicita 
     - Fecha Límite Seguimiento: ${f.metadata?.followUpDeadline || 'N/A'}`;
   }).join('\n');
 
+  // Formatear APUs por actividad
+  const activityAPUsFormatted = (project.activityAPUs || []).map(apu => {
+    const formatResource = (res: any) => `${res.description} (${res.quantity} ${res.unit} @ $${res.price.toLocaleString('es-CO')} = $${res.total.toLocaleString('es-CO')})`;
+    const matStr = apu.materials.length > 0 ? `    - Materiales: ${apu.materials.map(formatResource).join(' | ')}` : '';
+    const labStr = apu.labor.length > 0 ? `    - Mano de Obra: ${apu.labor.map(formatResource).join(' | ')}` : '';
+    const eqStr = apu.equipment.length > 0 ? `    - Equipos: ${apu.equipment.map(formatResource).join(' | ')}` : '';
+    const tranStr = apu.transport.length > 0 ? `    - Transporte: ${apu.transport.map(formatResource).join(' | ')}` : '';
+    const sections = [matStr, labStr, eqStr, tranStr].filter(s => s !== '').join('\n');
+    return `* APU Ítem [${apu.itemCode}] (Archivo PDF: ${apu.pdfFileName || 'Cargado'})\n${sections}`;
+  }).join('\n');
+
+  // Formatear base de datos de recursos / insumos (incluye materiales, mano de obra, equipos, etc.)
+  const costResourcesFormatted = (project.costResources || []).map(r => {
+    return `* Recurso [${r.code}] | ${r.description} | Tipo: ${r.type} | Unidad: ${r.unit} | Precio Ref: $${r.referencePrice.toLocaleString('es-CO')}`;
+  }).join('\n');
+
+  // Formatear transacciones de costos reales generados
+  const costTransactionsFormatted = (project.costTransactions || []).map(t => {
+    return `* Transacción [${t.date}] | Ítem: ${t.itemCode} | Tipo: ${t.resourceType} | Desc: ${t.description} | Cantidad: ${t.quantity} | Vlr Unitario: $${t.unitPrice.toLocaleString('es-CO')} | Vlr Total: $${t.totalPrice.toLocaleString('es-CO')}${t.provider ? ` | Proveedor: ${t.provider}` : ''}${t.invoiceNumber ? ` | Factura: ${t.invoiceNumber}` : ''}`;
+  }).join('\n');
+
   const customInstructionsSegment = project.agentCustomInstructions
     ? `\n\nINSTRUCCIONES ADICIONALES CONFIGURADAS POR EL USUARIO (MÁXIMA PRIORIDAD):\n${project.agentCustomInstructions}\n`
     : '';
@@ -257,6 +278,15 @@ ${agentTodosFormatted || 'No hay tareas pendientes en este momento.'}
 
 CORRESPONDENCIA Y OFICIOS REGISTRADOS:
 ${correspondenceFormatted || 'No hay oficios ni correspondencia registrada.'}
+
+ANÁLISIS DE PRECIOS UNITARIOS (APUS) POR ACTIVIDAD:
+${activityAPUsFormatted || 'No hay APUs registrados para las actividades.'}
+
+BASE DE DATOS DE RECURSOS E INSUMOS (MATERIALES, MANO DE OBRA, EQUIPOS):
+${costResourcesFormatted || 'No hay recursos registrados en la base de datos.'}
+
+REGISTRO DE COSTOS REALES GENERADOS (TRANSACCIONES):
+${costTransactionsFormatted || 'No hay transacciones de costos reales registradas.'}
 `;
-};
+}
 
