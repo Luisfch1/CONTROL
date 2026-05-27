@@ -2019,21 +2019,23 @@ export default function CostsView() {
                             flexShrink: 0
                           }}>
                             <div>
-                              <div style={{ color: 'hsl(var(--text-secondary))', fontWeight: 'bold' }}>{bi.item} - {bi.descripcion}</div>
-                              <div style={{ marginTop: '4px', fontSize: '0.7rem', color: 'hsl(var(--text-muted))' }}>
+                              <div style={{ color: 'hsl(var(--text-secondary))', fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '280px' }} title={`${bi.item} - ${bi.descripcion}`}>
+                                {bi.item} - {bi.descripcion}
+                              </div>
+                              <div style={{ marginTop: '6px', fontSize: '0.7rem', color: 'hsl(var(--text-muted))' }}>
                                 Cantidad Contrato: <strong>{bi.cantidad.toLocaleString()} {bi.unidad}</strong>
                               </div>
                               <div style={{ fontSize: '0.7rem', color: 'hsl(var(--text-muted))' }}>
-                                Cantidad Ejecutada (Avance): <strong style={{ color: 'hsl(var(--accent-primary))' }}>{executedQty.toLocaleString()} {bi.unidad}</strong>
+                                Cantidad Ejecutada (Avance): <strong>{executedQty.toLocaleString()} {bi.unidad}</strong>
                               </div>
                             </div>
-                            <div style={{ textAlign: 'right' }}>
-                              <div>Tarifa de Venta: <strong>${bi.vlrUnitario.toLocaleString()}</strong></div>
-                              <div style={{ marginTop: '2px', color: 'hsl(var(--text-secondary))' }}>
-                                Total Cobrado (Venta): <strong>${contractTotalVal.toLocaleString()}</strong>
+                            <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                              <div>Tarifa Unit. Venta: <strong>${bi.vlrUnitario.toLocaleString()}</strong></div>
+                              <div style={{ color: 'hsl(var(--text-secondary))' }}>
+                                Vlr. Total Contratado: <strong>${(bi.cantidad * bi.vlrUnitario).toLocaleString()}</strong>
                               </div>
-                              <div style={{ color: 'hsl(var(--primary-neon))' }}>
-                                Costo APU Teórico Total: <strong>${apuTotalCost.toLocaleString()}</strong>
+                              <div style={{ color: 'hsl(var(--accent-primary))' }}>
+                                Vlr. Total Ejecutado: <strong>${(executedQty * bi.vlrUnitario).toLocaleString()}</strong>
                               </div>
                             </div>
                           </div>
@@ -2146,19 +2148,43 @@ export default function CostsView() {
                             flexShrink: 0
                           }}>
                             <div>
-                              <div>Costo Real Proyectado: <strong style={{ fontSize: '0.85rem', color: realTotalCost > apuTotalCost ? 'hsl(var(--danger))' : 'hsl(var(--success))' }}>${Math.round(realTotalCost).toLocaleString()}</strong></div>
-                              <div style={{ marginTop: '4px', fontSize: '0.7rem', color: 'hsl(var(--text-muted))' }}>
-                                Costo Unitario Real: <strong>${Math.round(realUnitCost).toLocaleString()}</strong>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span style={{ color: 'hsl(var(--text-secondary))', fontWeight: 'bold' }}>
+                                  Análisis Real Ejecutado
+                                </span>
+                                <span className="badge" style={{
+                                  fontSize: '0.55rem',
+                                  padding: '1px 5px',
+                                  background: diffVal >= 0 ? 'rgba(142, 229, 50, 0.15)' : 'rgba(255, 0, 80, 0.15)',
+                                  border: diffVal >= 0 ? '1px solid hsl(var(--success))' : '1px solid hsl(var(--danger))',
+                                  color: diffVal >= 0 ? 'hsl(var(--success))' : 'hsl(var(--danger))',
+                                  fontWeight: 'bold'
+                                }}>
+                                  {diffVal >= 0 ? 'Ahorro' : 'Exceso'}: {Math.round(deviationPercent)}%
+                                </span>
+                              </div>
+                              <div style={{ marginTop: '6px', fontSize: '0.7rem', color: 'hsl(var(--text-muted))' }}>
+                                Cantidad Contrato: <strong>{bi.cantidad.toLocaleString()} {bi.unidad}</strong>
+                              </div>
+                              <div style={{ fontSize: '0.7rem', color: 'hsl(var(--text-muted))' }}>
+                                Cantidad Ejecutada (Avance): <strong>{executedQty.toLocaleString()} {bi.unidad}</strong>
                               </div>
                             </div>
-                            <div style={{ textAlign: 'right' }}>
-                              <div style={{ color: 'hsl(var(--text-muted))' }}>Diferencia vs APU Teórico:</div>
-                              <div style={{ 
-                                fontSize: '0.9rem', 
-                                fontWeight: 'bold', 
-                                color: diffVal >= 0 ? 'hsl(var(--success))' : 'hsl(var(--danger))' 
-                              }}>
-                                {diffVal >= 0 ? 'Ahorro: +' : 'Exceso: -'}${Math.round(Math.abs(diffVal)).toLocaleString()} ({Math.round(deviationPercent)}%)
+                            <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                              <div>Costo Unitario Real: <strong>${Math.round(realUnitCost).toLocaleString()}</strong></div>
+                              <div style={{ color: 'hsl(var(--text-secondary))' }}>
+                                Costo Total Contratado (Proy): <strong>${Math.round(bi.cantidad * realUnitCost).toLocaleString()}</strong>
+                              </div>
+                              <div style={{ color: realTotalCost > apuTotalCost ? 'hsl(var(--danger))' : 'hsl(var(--success))' }}>
+                                Costo Total Real Ejecutado: <strong>${Math.round(realTotalCost).toLocaleString()}</strong>
+                                <span style={{ 
+                                  marginLeft: '4px',
+                                  fontSize: '0.65rem',
+                                  color: diffVal >= 0 ? 'hsl(var(--success))' : 'hsl(var(--danger))',
+                                  fontWeight: 'bold'
+                                }}>
+                                  ({diffVal >= 0 ? '+' : '-'}${Math.round(Math.abs(diffVal)).toLocaleString()})
+                                </span>
                               </div>
                             </div>
                           </div>
