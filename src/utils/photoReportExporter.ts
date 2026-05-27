@@ -137,14 +137,14 @@ export const exportPhotosToWord = async (project: Project, options: ExportOption
         img.onload = () => {
           clearTimeout(timeout);
           const canvas = document.createElement('canvas');
-          const maxW = 600; 
+          const maxW = 1600; 
           const scale = Math.min(1, maxW / img.width);
           canvas.width = img.width * scale;
           canvas.height = img.height * scale;
           const ctx = canvas.getContext('2d');
           if (ctx) {
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            const dataUrl = canvas.toDataURL('image/jpeg', 0.65);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.90);
             
             const base64Data = dataUrl.split(',')[1];
             const cid = `img_${++imageCounter}@logi`;
