@@ -2055,9 +2055,10 @@ export default function CostsView() {
                                 <thead>
                                   <tr>
                                     <th>Insumo (APU)</th>
-                                    <th style={{ width: '15%', textAlign: 'center' }}>Unidad</th>
-                                    <th style={{ width: '20%', textAlign: 'right' }}>Rend/Cant</th>
+                                    <th style={{ width: '10%', textAlign: 'center' }}>Unidad</th>
+                                    <th style={{ width: '15%', textAlign: 'right' }}>Rend/Cant</th>
                                     <th style={{ width: '20%', textAlign: 'right' }}>Precio Teórico</th>
+                                    <th style={{ width: '20%', textAlign: 'right' }}>Total Teórico</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -2069,7 +2070,7 @@ export default function CostsView() {
                                     return (
                                       <Fragment key={cat}>
                                         <tr key={cat}>
-                                          <td colSpan={4} style={{
+                                          <td colSpan={5} style={{
                                             background: 'hsla(var(--accent-primary-hsl), 0.05)',
                                             color: 'hsl(var(--accent-primary))',
                                             fontWeight: 'bold',
@@ -2086,6 +2087,7 @@ export default function CostsView() {
                                             <td className="cell-center">{item.unit}</td>
                                             <td className="cell-right">{item.quantity.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 4 })}</td>
                                             <td className="cell-right">${item.price.toLocaleString()}</td>
+                                            <td className="cell-right">${item.total.toLocaleString()}</td>
                                           </tr>
                                         ))}
                                       </Fragment>
@@ -2256,49 +2258,6 @@ export default function CostsView() {
                             )}
                           </div>
 
-                          {/* Listado de Compras Físicas Directas de esta Actividad */}
-                          <h4 style={{ fontSize: '0.7rem', color: 'hsl(var(--text-muted))', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '8px', flexShrink: 0 }}>
-                            Egresos Físicos Directos en Bitácora ({txs.length})
-                          </h4>
-
-                          <div className="floating-scroll" style={{ height: '120px', flexShrink: 0, border: '1px solid var(--border-color)', borderRadius: '4px', padding: '6px', background: 'hsla(var(--bg-tertiary), 0.1)', paddingBottom: '24px' }}>
-                            {txs.length === 0 ? (
-                              <div style={{ padding: '15px', textAlign: 'center', color: 'hsl(var(--text-muted))', fontSize: '0.75rem', fontStyle: 'italic' }}>
-                                No se han registrado egresos directos en bitácora para esta actividad.
-                              </div>
-                            ) : (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                                {txs.map(tx => (
-                                  <div key={tx.id} style={{
-                                    padding: '8px 10px',
-                                    background: 'hsla(var(--bg-tertiary), 0.3)',
-                                    borderRadius: '4px',
-                                    border: '1px solid var(--border-color)',
-                                    fontSize: '0.7rem',
-                                    display: 'flex',
-                                    flexDirection: 'column',
-                                    gap: '4px'
-                                  }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', borderBottom: '1px solid rgba(255,255,255,0.04)', paddingBottom: '2px' }}>
-                                      <span style={{ color: 'hsl(var(--accent-primary))' }}>{tx.description}</span>
-                                      <span style={{ color: 'hsl(var(--text-muted))' }}>{tx.date}</span>
-                                    </div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'hsl(var(--text-secondary))' }}>
-                                      <span>Cantidad: <strong>{tx.quantity.toLocaleString()}</strong></span>
-                                      <span>Precio Unit: <strong>${tx.unitPrice.toLocaleString()}</strong></span>
-                                      <span style={{ color: 'hsl(var(--primary-neon))' }}>Total: <strong>${tx.totalPrice.toLocaleString()}</strong></span>
-                                    </div>
-                                    {(tx.provider || tx.invoiceNumber) && (
-                                      <div style={{ display: 'flex', gap: '15px', fontSize: '0.65rem', color: 'hsl(var(--text-muted))', marginTop: '1px' }}>
-                                        {tx.provider && <span>Prov: {tx.provider}</span>}
-                                        {tx.invoiceNumber && <span>Soporte: {tx.invoiceNumber}</span>}
-                                      </div>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
                         </div>
                       );
                     })()}
