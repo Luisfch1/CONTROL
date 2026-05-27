@@ -2016,7 +2016,8 @@ export default function CostsView() {
                             border: '1px solid var(--border-color)',
                             marginBottom: '12px',
                             fontSize: '0.75rem',
-                            flexShrink: 0
+                            flexShrink: 0,
+                            height: '95px'
                           }}>
                             <div>
                               <div style={{ color: 'hsl(var(--text-secondary))', fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '280px' }} title={`${bi.item} - ${bi.descripcion}`}>
@@ -2147,7 +2148,8 @@ export default function CostsView() {
                             border: '1px solid var(--border-color)',
                             marginBottom: '12px',
                             fontSize: '0.75rem',
-                            flexShrink: 0
+                            flexShrink: 0,
+                            height: '95px'
                           }}>
                             <div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -2308,7 +2310,8 @@ export default function CostsView() {
                             border: '1px solid var(--border-color)',
                             marginBottom: '12px',
                             fontSize: '0.75rem',
-                            flexShrink: 0
+                            flexShrink: 0,
+                            height: '72px'
                           }}>
                             <div>
                               <strong style={{ color: 'hsl(var(--accent-primary))', marginRight: '6px' }}>[{selectedRes.code}]</strong>
@@ -2400,7 +2403,8 @@ export default function CostsView() {
                             border: '1px solid var(--border-color)',
                             marginBottom: '12px',
                             fontSize: '0.75rem',
-                            flexShrink: 0
+                            flexShrink: 0,
+                            height: '72px'
                           }}>
                             <div>
                               <div>Precio Prom. Compra: <strong style={{ fontSize: '0.85rem', color: diffPrice > 1.0 ? 'hsl(var(--danger))' : avgRealPrice > 0 ? 'hsl(var(--success))' : 'inherit' }}>

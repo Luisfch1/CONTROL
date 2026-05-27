@@ -592,7 +592,11 @@ img {
 }
 
 .data-table th {
-  position: relative;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background-color: hsl(var(--bg-secondary));
+  box-shadow: inset 0 -1px 0 var(--border-color);
 }
 
 /* Photo Gallery Shimmer Effect */
