@@ -1525,12 +1525,13 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = '.lchp,.json,.zip';
+      input.multiple = true;
       input.style.display = 'none';
 
-      const fileSelectedPromise = new Promise<File | null>((resolve) => {
+      const filesSelectedPromise = new Promise<File[] | null>((resolve) => {
         input.onchange = (e: any) => {
-          const file = e.target.files?.[0] || null;
-          resolve(file);
+          const files = e.target.files ? Array.from(e.target.files) as File[] : [];
+          resolve(files.length > 0 ? files : null);
         };
         // Para cuando cancelan en navegadores o Electron que cierran sin selección
         window.addEventListener('focus', () => {
@@ -1546,160 +1547,162 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
       input.click();
       document.body.removeChild(input);
 
-      const file = await fileSelectedPromise;
-      if (!file) return;
+      const files = await filesSelectedPromise;
+      if (!files || files.length === 0) return;
 
-      let backupData: any = null;
-      const isZip = file.name.endsWith('.zip') || file.type === 'application/zip' || file.type === 'application/x-zip-compressed';
-      let imported = 0;
-      const localPhotosArray: { id: string; base64Data: string }[] = [];
-
-      if (isZip) {
-        const zip = await JSZip.loadAsync(file);
-        const bj = zip.file("backup.json");
-        if (!bj) {
-          throw new Error("No se encontró backup.json dentro del archivo ZIP de Logi.");
-        }
-        const jsonText = await bj.async("string");
-        backupData = JSON.parse(jsonText);
-
-        const items = backupData.items || [];
-        if (!Array.isArray(items)) {
-          throw new Error("Estructura de backup de Logi inválida.");
-        }
-
-        for (const item of items) {
-          if (!item.id) continue;
-          
-          // Buscar la foto por su id en la carpeta 'photos/'
-          const possiblePaths = [
-            `photos/${item.id}.jpg`,
-            `photos/${item.id}.jpeg`,
-            `photos/${item.id}.png`,
-            `photos/${item.id}.webp`,
-            `photos/${item.id}.bin`,
-            `photos/${projectId}/${item.id}.jpg`,
-            `photos/${projectId}/${item.id}.jpeg`,
-            `photos/${projectId}/${item.id}.png`,
-            `photos/${projectId}/${item.id}.webp`
-          ];
-          
-          let photoFile = null;
-          for (const path of possiblePaths) {
-            const zf = zip.file(path);
-            if (zf) {
-              photoFile = zf;
-              break;
-            }
-          }
-
-          if (!photoFile) {
-            // Fallback buscar en todo el zip
-            const filename = Object.keys(zip.files).find(name => name.includes(item.id) && !zip.files[name].dir);
-            if (filename) {
-              photoFile = zip.file(filename);
-            }
-          }
-
-          if (photoFile) {
-            const arrayBuffer = await photoFile.async("arraybuffer");
-            const mimeType = item.mime || "image/jpeg";
-            const blob = new Blob([arrayBuffer], { type: mimeType });
-            const base64Data = await new Promise<string>((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onloadend = () => resolve(reader.result as string);
-              reader.onerror = reject;
-              reader.readAsDataURL(blob);
-            });
-
-            await photoDB.savePhoto(item.id, projectId, base64Data);
-            localPhotosArray.push({ id: item.id, base64Data });
-            imported++;
-          }
-        }
-      } else {
-        const content = await file.text();
-        backupData = JSON.parse(content);
-
-        if (!backupData.photos || !Array.isArray(backupData.photos)) {
-          throw new Error("Formato de archivo .lchp inválido.");
-        }
-
-        for (const photo of backupData.photos) {
-          if (photo.id && photo.base64Data) {
-            await photoDB.savePhoto(photo.id, projectId, photo.base64Data);
-            localPhotosArray.push({ id: photo.id, base64Data: photo.base64Data });
-            imported++;
-          }
-        }
-      }
-
-      // Si el backup contiene metadatos completos de las entradas (formato extendido V2 o ítems de Logi)
-      const backupEntries = backupData.entries || backupData.items || [];
-
+      let totalImportedPhotos = 0;
+      let totalUpdatedEntries = 0;
+      
       captureHistory();
-      setProjects(prev => prev.map(p => {
-        if (String(p.id) !== String(projectId)) return p;
-        
-        const currentEntries = p.logiEntries || [];
-        const updatedEntries = [...currentEntries];
 
-        // 1. Integrar o actualizar las entradas del archivo .lchp V2 / Logi items
-        backupEntries.forEach((newEntry: any) => {
-          const existingIdx = updatedEntries.findIndex(e => String(e.id) === String(newEntry.id));
-          const hasLocalPhoto = isZip
-            ? localPhotosArray.some((ph: any) => String(ph.id) === String(newEntry.id))
-            : backupData.photos.some((ph: any) => String(ph.id) === String(newEntry.id));
+      for (const file of files) {
+        let backupData: any = null;
+        const isZip = file.name.endsWith('.zip') || file.type === 'application/zip' || file.type === 'application/x-zip-compressed';
+        let imported = 0;
+        const localPhotosArray: { id: string; base64Data: string }[] = [];
+
+        if (isZip) {
+          const zip = await JSZip.loadAsync(file);
+          const bj = zip.file("backup.json");
+          if (!bj) {
+            throw new Error(`No se encontró backup.json dentro del archivo ZIP: ${file.name}`);
+          }
+          const jsonText = await bj.async("string");
+          backupData = JSON.parse(jsonText);
+
+          const items = backupData.items || [];
+          if (!Array.isArray(items)) {
+            throw new Error(`Estructura de backup de Logi inválida en ${file.name}`);
+          }
+
+          for (const item of items) {
+            if (!item.id) continue;
+            
+            // Buscar la foto por su id en la carpeta 'photos/'
+            const possiblePaths = [
+              `photos/${item.id}.jpg`,
+              `photos/${item.id}.jpeg`,
+              `photos/${item.id}.png`,
+              `photos/${item.id}.webp`,
+              `photos/${item.id}.bin`,
+              `photos/${projectId}/${item.id}.jpg`,
+              `photos/${projectId}/${item.id}.jpeg`,
+              `photos/${projectId}/${item.id}.png`,
+              `photos/${projectId}/${item.id}.webp`
+            ];
+            
+            let photoFile = null;
+            for (const path of possiblePaths) {
+              const zf = zip.file(path);
+              if (zf) {
+                photoFile = zf;
+                break;
+              }
+            }
+
+            if (!photoFile) {
+              // Fallback buscar en todo el zip
+              const filename = Object.keys(zip.files).find(name => name.includes(item.id) && !zip.files[name].dir);
+              if (filename) {
+                photoFile = zip.file(filename);
+              }
+            }
+
+            if (photoFile) {
+              const arrayBuffer = await photoFile.async("arraybuffer");
+              const mimeType = item.mime || "image/jpeg";
+              const blob = new Blob([arrayBuffer], { type: mimeType });
+              const base64Data = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+              });
+
+              await photoDB.savePhoto(item.id, projectId, base64Data);
+              localPhotosArray.push({ id: item.id, base64Data });
+              imported++;
+            }
+          }
+        } else {
+          const content = await file.text();
+          backupData = JSON.parse(content);
+
+          if (!backupData.photos || !Array.isArray(backupData.photos)) {
+            throw new Error(`Formato de archivo .lchp inválido en ${file.name}`);
+          }
+
+          for (const photo of backupData.photos) {
+            if (photo.id && photo.base64Data) {
+              await photoDB.savePhoto(photo.id, projectId, photo.base64Data);
+              localPhotosArray.push({ id: photo.id, base64Data: photo.base64Data });
+              imported++;
+            }
+          }
+        }
+
+        totalImportedPhotos += imported;
+        const backupEntries = backupData.entries || backupData.items || [];
+        totalUpdatedEntries += backupEntries.length;
+
+        // Integrar en el estado del proyecto
+        setProjects(prev => prev.map(p => {
+          if (String(p.id) !== String(projectId)) return p;
           
-          const entryToUpsert = {
-            id: String(newEntry.id),
-            date: newEntry.date || newEntry.fecha || new Date().toISOString().split('T')[0],
-            itemCode: String(newEntry.itemCode || "").trim(),
-            description: String(newEntry.description || newEntry.descripcion || "").trim(),
-            imageUrl: "",
-            isLocal: hasLocalPhoto ? true : !!newEntry.isLocal,
-            status: (newEntry.status || (newEntry.done ? 'integrated' : 'pending')) as 'pending' | 'integrated'
-          };
+          const currentEntries = p.logiEntries || [];
+          const updatedEntries = [...currentEntries];
 
-          if (existingIdx >= 0) {
-            const localEntry = updatedEntries[existingIdx];
-            updatedEntries[existingIdx] = {
-              ...localEntry,
-              ...entryToUpsert,
-              itemCode: (localEntry.itemCode && localEntry.itemCode.trim()) ? localEntry.itemCode : entryToUpsert.itemCode,
-              description: (localEntry.description && localEntry.description.trim()) ? localEntry.description : entryToUpsert.description,
-              // Si la entrada existente ya estaba integrada en CONTROL, preservar su status 'integrated'
-              status: localEntry.status === 'integrated' ? 'integrated' : entryToUpsert.status
+          // 1. Integrar o actualizar las entradas del archivo .lchp V2 / Logi items
+          backupEntries.forEach((newEntry: any) => {
+            const existingIdx = updatedEntries.findIndex(e => String(e.id) === String(newEntry.id));
+            const hasLocalPhoto = isZip
+              ? localPhotosArray.some((ph: any) => String(ph.id) === String(newEntry.id))
+              : backupData.photos?.some((ph: any) => String(ph.id) === String(newEntry.id));
+            
+            const entryToUpsert = {
+              id: String(newEntry.id),
+              date: newEntry.date || newEntry.fecha || new Date().toISOString().split('T')[0],
+              itemCode: String(newEntry.itemCode || "").trim(),
+              description: String(newEntry.description || newEntry.descripcion || "").trim(),
+              imageUrl: "",
+              isLocal: hasLocalPhoto ? true : !!newEntry.isLocal,
+              status: (newEntry.status || (newEntry.done ? 'integrated' : 'pending')) as 'pending' | 'integrated'
             };
-          } else {
-            updatedEntries.push(entryToUpsert);
-          }
-        });
 
-        // 2. Para las entradas existentes que no venían en 'entries' pero su foto sí está en 'photos',
-        // marcarlas como isLocal: true
-        const finalEntries = updatedEntries.map(e => {
-          const hasLocalPhoto = isZip
-            ? localPhotosArray.some((ph: any) => String(ph.id) === String(e.id))
-            : backupData.photos.some((ph: any) => String(ph.id) === String(e.id));
-          if (hasLocalPhoto) {
-            return { ...e, isLocal: true };
-          }
-          return e;
-        });
+            if (existingIdx >= 0) {
+              const localEntry = updatedEntries[existingIdx];
+              updatedEntries[existingIdx] = {
+                ...localEntry,
+                ...entryToUpsert,
+                itemCode: (localEntry.itemCode && localEntry.itemCode.trim()) ? localEntry.itemCode : entryToUpsert.itemCode,
+                description: (localEntry.description && localEntry.description.trim()) ? localEntry.description : entryToUpsert.description,
+                status: localEntry.status === 'integrated' ? 'integrated' : entryToUpsert.status
+              };
+            } else {
+              updatedEntries.push(entryToUpsert);
+            }
+          });
 
-        return { ...p, logiEntries: finalEntries };
-      }));
+          // 2. Para las entradas existentes que no venían en 'entries' pero su foto sí está en 'photos',
+          // marcarlas como isLocal: true
+          const finalEntries = updatedEntries.map(e => {
+            const hasLocalPhoto = isZip
+              ? localPhotosArray.some((ph: any) => String(ph.id) === String(e.id))
+              : backupData.photos?.some((ph: any) => String(ph.id) === String(e.id));
+            if (hasLocalPhoto) {
+              return { ...e, isLocal: true };
+            }
+            return e;
+          });
 
-      const hasEntries = backupEntries.length > 0;
-      if (hasEntries) {
-        alert(`Sincronización finalizada exitosamente.\n\nSe importaron ${imported} fotos y se actualizaron/crearon ${backupEntries.length} entradas de registro en CONTROL.`);
-      } else {
-        alert(`Se han importado ${imported} fotos exitosamente a la base local (V1 Legacy).`);
+          return { ...p, logiEntries: finalEntries };
+        }));
       }
+
+      alert(`Sincronización en lote finalizada.\n\nSe importaron ${totalImportedPhotos} fotos y se actualizaron/crearon ${totalUpdatedEntries} entradas a partir de ${files.length} archivo(s).`);
     } catch (error: any) {
       console.error("Error importando fotos", error);
-      alert("Error al intentar cargar el archivo .lchp: " + (error.message || String(error)));
+      alert("Error al intentar cargar los archivos: " + (error.message || String(error)));
     }
   };
 
