@@ -947,3 +947,17 @@ img {
   0%, 100% { transform: scale(1); opacity: 0.7; }
   50% { transform: scale(1.15); opacity: 1; filter: drop-shadow(0 0 8px hsla(var(--primary-neon-hsl), 0.6)); }
 }
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+  display: inline-block;
+}

@@ -9,6 +9,7 @@ export interface ExportOptions {
   itemFilter?: string;
   textFilter?: string;
   onProgress?: (progress: number) => void;
+  photos?: LogiEntry[];
 }
 
 const getLogoBase64 = (): Promise<string> => {
@@ -59,7 +60,7 @@ export const getFilteredPhotos = (project: Project, options: ExportOptions): Log
  */
 export const exportPhotosToWord = async (project: Project, options: ExportOptions): Promise<void> => {
   const { dateFrom, dateTo, itemFilter, textFilter, onProgress } = options;
-  const reportPhotos = getFilteredPhotos(project, options);
+  const reportPhotos = options.photos || getFilteredPhotos(project, options);
 
   if (reportPhotos.length === 0) {
     throw new Error("No hay fotos que coincidan con los filtros activos para exportar.");
@@ -371,7 +372,7 @@ export const exportPhotosToWord = async (project: Project, options: ExportOption
  */
 export const exportPhotosToZip = async (project: Project, options: ExportOptions): Promise<void> => {
   const { dateFrom, dateTo, onProgress } = options;
-  const reportPhotos = getFilteredPhotos(project, options);
+  const reportPhotos = options.photos || getFilteredPhotos(project, options);
 
   if (reportPhotos.length === 0) {
     throw new Error("No hay fotos que cumplan con los filtros activos para exportar.");

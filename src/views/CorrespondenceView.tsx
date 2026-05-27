@@ -144,18 +144,29 @@ export default function CorrespondenceView() {
         const fileId = 'corr-file-' + Date.now();
         const base64Data = reader.result as string;
 
-        // Guardar archivo PDF en IndexedDB localmente para evitar saturar localStorage
-        try {
-          await correspondenceDB.saveFile(fileId, project.id, base64Data);
-        } catch (dbErr) {
-          console.error("Error al guardar PDF en IndexedDB:", dbErr);
+        // Guardar archivo PDF físicamente en Electron, o en IndexedDB (Web fallback)
+        const api = (window as any).electronAPI;
+        if (api && typeof api.saveCorrespondenceFile === 'function') {
+          try {
+            await api.saveCorrespondenceFile(project.id, file.name, base64Data);
+            console.log("[Correspondence] Guardado en disco local exitoso:", file.name);
+          } catch (err) {
+            console.error("Error al guardar PDF en disco local:", err);
+          }
+        } else {
+          // Web Fallback
+          try {
+            await correspondenceDB.saveFile(fileId, project.id, base64Data);
+          } catch (dbErr) {
+            console.error("Error al guardar PDF en IndexedDB:", dbErr);
+          }
         }
 
         const newFile: CorrespondenceFile = {
           id: fileId,
           name: file.name,
           uploadDate: new Date().toISOString(),
-          fileData: base64Data, // save base64 (se limpia al persistir en localStorage pero permanece en memoria y archivo físico)
+          fileData: undefined, // No guardamos base64 en memoria de React para mantener ligero el estado
           folderId: currentFolderId || 'root',
           metadata: {
             date: metadata.date,
@@ -190,12 +201,28 @@ export default function CorrespondenceView() {
   };
 
   const handleDeleteFile = async (fileId: string) => {
-    if (confirm('¿Está seguro de que desea eliminar este oficio permanentemente?')) {
+    const fileToDelete = files.find(f => f.id === fileId);
+    if (!fileToDelete) return;
+
+    if (confirm(`¿Está seguro de que desea eliminar el oficio "${fileToDelete.name}" permanentemente?`)) {
+      // Borrar de IndexedDB en cualquier caso (por si existía antes)
       try {
         await correspondenceDB.deleteFile(fileId);
       } catch (dbErr) {
         console.error("Error al borrar PDF de IndexedDB:", dbErr);
       }
+      
+      // Borrar del disco local en Electron
+      const api = (window as any).electronAPI;
+      if (api && typeof api.deleteCorrespondenceFile === 'function') {
+        try {
+          await api.deleteCorrespondenceFile(project.id, fileToDelete.name);
+          console.log("[Correspondence] Borrado del disco local exitoso:", fileToDelete.name);
+        } catch (err) {
+          console.error("Error al borrar PDF de disco local:", err);
+        }
+      }
+
       const updatedFiles = files.filter(f => f.id !== fileId);
       updateProject(project.id, { correspondenceFiles: updatedFiles });
       saveProjectPhysically(folders, updatedFiles);
@@ -255,13 +282,36 @@ export default function CorrespondenceView() {
   const handleViewPdf = async (file: CorrespondenceFile, e?: React.MouseEvent) => {
     e?.stopPropagation();
     let data = file.fileData;
+
+    // En Electron, intentar leer del disco local primero
+    const api = (window as any).electronAPI;
+    if (!data && api && typeof api.readCorrespondenceFile === 'function') {
+      try {
+        data = await api.readCorrespondenceFile(project.id, file.name) || undefined;
+        if (data) {
+          console.log("[Correspondence] Cargado desde disco local:", file.name);
+        }
+      } catch (err) {
+        console.error("Error al leer desde disco local:", err);
+      }
+    }
+
+    // Si no está en disco (o si estamos en versión web), buscar en IndexedDB
     if (!data) {
       try {
         data = await correspondenceDB.getFile(file.id) || undefined;
+        
+        // MIGRACIÓN AUTOMÁTICA: Si lo encontramos en IndexedDB y estamos en Electron,
+        // lo guardamos en disco local para que quede migrado de ahora en adelante.
+        if (data && api && typeof api.saveCorrespondenceFile === 'function') {
+          console.log("[Correspondence] Migrando archivo de IndexedDB a disco local:", file.name);
+          await api.saveCorrespondenceFile(project.id, file.name, data);
+        }
       } catch (dbErr) {
         console.error("Error al cargar PDF desde IndexedDB:", dbErr);
       }
     }
+
     if (!data) {
       alert("No hay datos físicos asociados a este archivo para visualizar.");
       return;
@@ -288,9 +338,26 @@ export default function CorrespondenceView() {
 
   const handleDownloadPdf = async (file: CorrespondenceFile) => {
     let data = file.fileData;
+
+    // En Electron, intentar leer del disco local primero
+    const api = (window as any).electronAPI;
+    if (!data && api && typeof api.readCorrespondenceFile === 'function') {
+      try {
+        data = await api.readCorrespondenceFile(project.id, file.name) || undefined;
+      } catch (err) {
+        console.error("Error al leer desde disco local para descarga:", err);
+      }
+    }
+
+    // Fallback a IndexedDB
     if (!data) {
       try {
         data = await correspondenceDB.getFile(file.id) || undefined;
+        // Migración automática al descargar
+        if (data && api && typeof api.saveCorrespondenceFile === 'function') {
+          console.log("[Correspondence] Migrando archivo de IndexedDB a disco local al descargar:", file.name);
+          await api.saveCorrespondenceFile(project.id, file.name, data);
+        }
       } catch (dbErr) {
         console.error("Error al cargar PDF desde IndexedDB:", dbErr);
       }

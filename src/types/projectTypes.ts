@@ -124,7 +124,52 @@ export interface Project {
   filePath?: string;
   correspondenceFolders?: CorrespondenceFolder[];
   correspondenceFiles?: CorrespondenceFile[];
+  activityAPUs?: ActivityAPU[];
+  costResources?: CostResource[];
+  costTransactions?: CostTransaction[];
+  apuFiles?: string[];
 }
+
+export interface APUResource {
+  description: string;
+  unit: string;
+  quantity: number;
+  price: number;
+  total: number;
+}
+
+export interface ActivityAPU {
+  itemCode: string;
+  materials: APUResource[];
+  labor: APUResource[];
+  equipment: APUResource[];
+  transport: APUResource[];
+  pdfFileName?: string;
+}
+
+export interface CostResource {
+  id: string;
+  code: string;
+  description: string;
+  type: 'material' | 'labor' | 'equipment' | 'transport' | 'other';
+  unit: string;
+  referencePrice: number;
+}
+
+export interface CostTransaction {
+  id: string;
+  date: string;
+  itemCode: string;
+  resourceId?: string;
+  resourceType: 'material' | 'labor' | 'equipment' | 'transport' | 'other';
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
+  provider?: string;
+  invoiceNumber?: string;
+}
+
 
 export interface AgentTodo {
   id: string;

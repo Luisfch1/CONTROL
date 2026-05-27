@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Calculator, CalendarClock, TrendingUp,
   Camera, FileText, Sun, Moon, Download, Upload,
   Folder, X, Settings, Image, Palette, Undo2, Redo2, Bot, Check,
-  Receipt, HardHat, Glasses, Terminal
+  Receipt, HardHat, Glasses, Terminal, ChevronDown, ChevronRight, DollarSign
 } from 'lucide-react';
 import { useProjects } from './context/ProjectsContext';
 import { useAgent } from './context/AgentContext';
@@ -25,9 +25,10 @@ import EditProjectView from './views/EditProjectView';
 import AgentPanel from './views/AgentPanel';
 import PhotoReportsView from './views/PhotoReportsView';
 import CorrespondenceView from './views/CorrespondenceView';
+import CostsView from './views/CostsView';
 import logo from './assets/logo.png';
 
-type ViewState = 'dashboard' | 'budget' | 'schedule' | 'progress' | 'photos' | 'reports' | 'parciales' | 'analytics' | 'create-project' | 'edit-project' | 'photo-reports' | 'correspondence';
+type ViewState = 'dashboard' | 'budget' | 'schedule' | 'progress' | 'photos' | 'reports' | 'parciales' | 'analytics' | 'create-project' | 'edit-project' | 'photo-reports' | 'correspondence' | 'costs';
 
 // Utilidad para convertir HEX a HSL (H S% L%)
 const hexToHSL = (hex: string): string => {
@@ -86,10 +87,19 @@ function App() {
     canRedo,
     currentView,
     setCurrentView,
-    updateProject
+    updateProject,
+    costsActiveTab,
+    setCostsActiveTab
   } = useProjects();
+  const [isCostsMenuExpanded, setIsCostsMenuExpanded] = useState(() => currentView === 'costs');
   const [showLaunchFlash, setShowLaunchFlash] = useState(false);
   const [launchedFileName, setLaunchedFileName] = useState('');
+
+  useEffect(() => {
+    if (currentView === 'costs') {
+      setIsCostsMenuExpanded(true);
+    }
+  }, [currentView]);
   
   const [currentTimeText, setCurrentTimeText] = useState('');
   const [currentAlertIndex, setCurrentAlertIndex] = useState(0);
@@ -348,6 +358,7 @@ function App() {
       case 'edit-project': return <EditProjectView onSaved={() => setCurrentView('dashboard')} onCancel={() => setCurrentView('dashboard')} />;
       case 'photo-reports': return <PhotoReportsView />;
       case 'correspondence': return <CorrespondenceView />;
+      case 'costs': return <CostsView />;
       default: return <DashboardView />;
     }
   };
@@ -889,6 +900,101 @@ function App() {
               >
                 <FileText size={20} />
                 <span>Correspondencia</span>
+              </div>
+
+              {/* COSTOS Collapsible Item */}
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                <div
+                  className={`nav-item ${currentView === 'costs' ? 'active' : ''}`}
+                  onClick={() => {
+                    setCurrentView('costs');
+                    setIsCostsMenuExpanded(!isCostsMenuExpanded);
+                  }}
+                  style={{ 
+                    display: 'flex', 
+                    justifyContent: 'space-between', 
+                    alignItems: 'center', 
+                    width: '100%', 
+                    paddingRight: 'var(--spacing-lg)' 
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-md)' }}>
+                    <DollarSign size={20} />
+                    <span>Costos</span>
+                  </div>
+                  {isCostsMenuExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                </div>
+
+                {isCostsMenuExpanded && (
+                  <div style={{
+                    paddingLeft: '12px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '2px',
+                    marginTop: '2px',
+                    borderLeft: '1px solid hsla(var(--border-color), 0.2)',
+                    marginLeft: '36px',
+                    marginBottom: '8px'
+                  }}>
+                    <div
+                      className="nav-item"
+                      style={{
+                        padding: '6px 12px',
+                        fontSize: '0.75rem',
+                        textTransform: 'none',
+                        letterSpacing: 'normal',
+                        gap: '6px',
+                        color: currentView === 'costs' && costsActiveTab === 'contract' ? 'hsl(var(--primary-neon))' : 'hsl(var(--text-secondary))',
+                        background: currentView === 'costs' && costsActiveTab === 'contract' ? 'hsla(var(--primary-neon-hsl), 0.08)' : 'transparent',
+                        borderLeft: currentView === 'costs' && costsActiveTab === 'contract' ? '2px solid hsl(var(--primary-neon))' : 'none'
+                      }}
+                      onClick={() => {
+                        setCurrentView('costs');
+                        setCostsActiveTab('contract');
+                      }}
+                    >
+                      <span>📊 Contrato (Venta)</span>
+                    </div>
+                    <div
+                      className="nav-item"
+                      style={{
+                        padding: '6px 12px',
+                        fontSize: '0.75rem',
+                        textTransform: 'none',
+                        letterSpacing: 'normal',
+                        gap: '6px',
+                        color: currentView === 'costs' && costsActiveTab === 'operation' ? 'hsl(var(--primary-neon))' : 'hsl(var(--text-secondary))',
+                        background: currentView === 'costs' && costsActiveTab === 'operation' ? 'hsla(var(--primary-neon-hsl), 0.08)' : 'transparent',
+                        borderLeft: currentView === 'costs' && costsActiveTab === 'operation' ? '2px solid hsl(var(--primary-neon))' : 'none'
+                      }}
+                      onClick={() => {
+                        setCurrentView('costs');
+                        setCostsActiveTab('operation');
+                      }}
+                    >
+                      <span>🛒 Mis Costos (Operación)</span>
+                    </div>
+                    <div
+                      className="nav-item"
+                      style={{
+                        padding: '6px 12px',
+                        fontSize: '0.75rem',
+                        textTransform: 'none',
+                        letterSpacing: 'normal',
+                        gap: '6px',
+                        color: currentView === 'costs' && costsActiveTab === 'control' ? 'hsl(var(--primary-neon))' : 'hsl(var(--text-secondary))',
+                        background: currentView === 'costs' && costsActiveTab === 'control' ? 'hsla(var(--primary-neon-hsl), 0.08)' : 'transparent',
+                        borderLeft: currentView === 'costs' && costsActiveTab === 'control' ? '2px solid hsl(var(--primary-neon))' : 'none'
+                      }}
+                      onClick={() => {
+                        setCurrentView('costs');
+                        setCostsActiveTab('control');
+                      }}
+                    >
+                      <span>🚨 Control Financiero</span>
+                    </div>
+                  </div>
+                )}
               </div>
             </>
           )}

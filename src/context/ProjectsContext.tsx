@@ -63,8 +63,10 @@ interface ProjectsContextType {
   exportLocalPhotosBackup: (projectId: string) => Promise<void>;
   importLocalPhotosBackup: (projectId: string) => Promise<void>;
   getPhotoLocalUrl: (entryId: string) => Promise<string | null>;
-  currentView: 'dashboard' | 'budget' | 'schedule' | 'progress' | 'photos' | 'reports' | 'parciales' | 'analytics' | 'create-project' | 'edit-project' | 'photo-reports' | 'correspondence';
-  setCurrentView: (view: 'dashboard' | 'budget' | 'schedule' | 'progress' | 'photos' | 'reports' | 'parciales' | 'analytics' | 'create-project' | 'edit-project' | 'photo-reports' | 'correspondence') => void;
+  currentView: 'dashboard' | 'budget' | 'schedule' | 'progress' | 'photos' | 'reports' | 'parciales' | 'analytics' | 'create-project' | 'edit-project' | 'photo-reports' | 'correspondence' | 'costs';
+  setCurrentView: (view: 'dashboard' | 'budget' | 'schedule' | 'progress' | 'photos' | 'reports' | 'parciales' | 'analytics' | 'create-project' | 'edit-project' | 'photo-reports' | 'correspondence' | 'costs') => void;
+  costsActiveTab: 'contract' | 'operation' | 'control';
+  setCostsActiveTab: (tab: 'contract' | 'operation' | 'control') => void;
   selectedPhotoId: string | null;
   setSelectedPhotoId: (id: string | null) => void;
   updateLogiEntry: (projectId: string, entryId: string, updates: Partial<LogiEntry>) => void;
@@ -99,7 +101,8 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
     return localStorage.getItem('lch-control-active') || null;
   });
 
-  const [currentView, setCurrentView] = useState<'dashboard' | 'budget' | 'schedule' | 'progress' | 'photos' | 'reports' | 'parciales' | 'analytics' | 'create-project' | 'edit-project' | 'photo-reports' | 'correspondence'>('dashboard');
+  const [currentView, setCurrentView] = useState<'dashboard' | 'budget' | 'schedule' | 'progress' | 'photos' | 'reports' | 'parciales' | 'analytics' | 'create-project' | 'edit-project' | 'photo-reports' | 'correspondence' | 'costs'>('dashboard');
+  const [costsActiveTab, setCostsActiveTab] = useState<'contract' | 'operation' | 'control'>('contract');
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
 
   // Historia para Undo/Redo
@@ -195,14 +198,16 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        return {
-          ...defaultWidths,
-          ...parsed,
-          budget: { ...defaultWidths.budget, ...(parsed.budget || {}) },
-          schedule: { ...defaultWidths.schedule, ...(parsed.schedule || {}) },
-          progress: { ...defaultWidths.progress, ...(parsed.progress || {}) },
-          parciales: { ...defaultWidths.parciales, ...(parsed.parciales || {}) }
-        };
+        if (parsed && typeof parsed === 'object') {
+          return {
+            ...defaultWidths,
+            ...parsed,
+            budget: { ...defaultWidths.budget, ...(parsed.budget || {}) },
+            schedule: { ...defaultWidths.schedule, ...(parsed.schedule || {}) },
+            progress: { ...defaultWidths.progress, ...(parsed.progress || {}) },
+            parciales: { ...defaultWidths.parciales, ...(parsed.parciales || {}) }
+          };
+        }
       } catch (e) {
         console.error("Error parsing saved column widths", e);
       }
@@ -281,9 +286,35 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
     if (activeProjectId && (window as any).electronAPI && typeof (window as any).electronAPI.writeFile === 'function') {
       const activeProject = projects.find(p => String(p.id) === String(activeProjectId));
       if (activeProject && activeProject.filePath) {
-        (window as any).electronAPI.writeFile(activeProject.filePath, JSON.stringify(activeProject, null, 2))
-          .then((success: boolean) => console.log('[Auto-Save] Proyecto guardado físicamente en:', activeProject.filePath, success))
-          .catch((err: any) => console.error('[Auto-Save] Error al guardar físicamente:', err));
+        photoDB.getPhotosByProject(activeProject.id).then((photos) => {
+          const projectToSave = {
+            ...activeProject,
+            localPhotos: photos
+          };
+          
+          let serializedData: string;
+          try {
+            // Usamos JSON.stringify compacto para evitar el overhead de espacios/saltos de línea (null, 2)
+            serializedData = JSON.stringify(projectToSave);
+          } catch (stringifyErr) {
+            console.error('[Auto-Save] Error al serializar proyecto con fotos, intentando guardar sin fotos:', stringifyErr);
+            serializedData = JSON.stringify(activeProject);
+          }
+
+          (window as any).electronAPI.writeFile(activeProject.filePath, serializedData)
+            .then((success: boolean) => console.log('[Auto-Save] Proyecto guardado físicamente en:', activeProject.filePath, success))
+            .catch((err: any) => console.error('[Auto-Save] Error al guardar físicamente en disco:', err));
+        }).catch((err) => {
+          console.error('[Auto-Save] Error al leer fotos o procesar auto-guardado:', err);
+          try {
+            const serializedFallback = JSON.stringify(activeProject);
+            (window as any).electronAPI.writeFile(activeProject.filePath, serializedFallback)
+              .then((success: boolean) => console.log('[Auto-Save] Proyecto guardado físicamente (sin fotos) en:', activeProject.filePath, success))
+              .catch((err: any) => console.error('[Auto-Save] Error al guardar físicamente (sin fotos):', err));
+          } catch (fallbackErr) {
+            console.error('[Auto-Save] Error crítico al serializar fallback sin fotos:', fallbackErr);
+          }
+        });
       }
     }
   }, [projects, activeProjectId]);
@@ -827,7 +858,34 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
       alert("No hay ningún proyecto activo para guardar.");
       return;
     }
-    const dataStr = JSON.stringify(project, null, 2);
+
+    // Obtener las fotos locales del proyecto desde IndexedDB para empaquetarlas en el .lch
+    let localPhotos: any[] = [];
+    try {
+      localPhotos = await photoDB.getPhotosByProject(project.id);
+    } catch (e) {
+      console.error("Error al leer fotos locales para exportar:", e);
+    }
+
+    const projectToExport = {
+      ...project,
+      localPhotos
+    };
+
+    let dataStr = '';
+    try {
+      dataStr = JSON.stringify(projectToExport);
+    } catch (err) {
+      console.error("Error al serializar proyecto con fotos, exportando sin fotos:", err);
+      alert("El archivo es demasiado grande debido a las fotos. Guardando el proyecto sin fotos.");
+      try {
+        dataStr = JSON.stringify(project);
+      } catch (err2) {
+        console.error("Error crítico al serializar proyecto:", err2);
+        alert("Error crítico al exportar el proyecto.");
+        return;
+      }
+    }
     const safeName = project.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
 
     try {
@@ -906,7 +964,20 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
         const result = await api.openLchDialog();
         if (!result) return; // Usuario canceló
 
-        const importedProject = JSON.parse(result.content) as Project;
+        const importedData = JSON.parse(result.content);
+        if (importedData.localPhotos && Array.isArray(importedData.localPhotos)) {
+          let importedCount = 0;
+          for (const photo of importedData.localPhotos) {
+            if (photo.id && photo.base64Data) {
+              await photoDB.savePhoto(photo.id, importedData.id, photo.base64Data);
+              importedCount++;
+            }
+          }
+          console.log(`[Import Electron] Importadas ${importedCount} fotos locales a IndexedDB.`);
+          delete importedData.localPhotos;
+        }
+
+        const importedProject = importedData as Project;
         if (!importedProject.id || !importedProject.name) {
           throw new Error("Formato de archivo inválido.");
         }
@@ -934,7 +1005,21 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
         setFileHandle(handle);
         const file = await handle.getFile();
         const content = await file.text();
-        const importedProject = JSON.parse(content) as Project;
+        
+        const importedData = JSON.parse(content);
+        if (importedData.localPhotos && Array.isArray(importedData.localPhotos)) {
+          let importedCount = 0;
+          for (const photo of importedData.localPhotos) {
+            if (photo.id && photo.base64Data) {
+              await photoDB.savePhoto(photo.id, importedData.id, photo.base64Data);
+              importedCount++;
+            }
+          }
+          console.log(`[Import Web] Importadas ${importedCount} fotos locales a IndexedDB.`);
+          delete importedData.localPhotos;
+        }
+
+        const importedProject = importedData as Project;
 
         if (!importedProject.id || !importedProject.name) {
           throw new Error("Formato de archivo inválido.");
@@ -967,7 +1052,21 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
       setFileHandle(handle);
       const file = await handle.getFile();
       const content = await file.text();
-      const importedProject = JSON.parse(content) as Project;
+      
+      const importedData = JSON.parse(content);
+      if (importedData.localPhotos && Array.isArray(importedData.localPhotos)) {
+        let importedCount = 0;
+        for (const photo of importedData.localPhotos) {
+          if (photo.id && photo.base64Data) {
+            await photoDB.savePhoto(photo.id, importedData.id, photo.base64Data);
+            importedCount++;
+          }
+        }
+        console.log(`[Launch Electron] Importadas ${importedCount} fotos locales a IndexedDB.`);
+        delete importedData.localPhotos;
+      }
+
+      const importedProject = importedData as Project;
 
       if (!importedProject.id || !importedProject.name) {
         throw new Error("Formato de archivo inválido.");
@@ -1374,7 +1473,8 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
       };
       const dataStr = JSON.stringify(backupData);
 
-      if ('showSaveFilePicker' in window) {
+      const isElectron = !!(window as any).electronAPI;
+      if ('showSaveFilePicker' in window && !isElectron) {
         const safeName = project.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
         const handle = await (window as any).showSaveFilePicker({
           suggestedName: `${safeName}_Fotos.lchp`,
@@ -1421,97 +1521,110 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
 
   const importLocalPhotosBackup = async (projectId: string) => {
     try {
-      if ('showOpenFilePicker' in window) {
-        const [handle] = await (window as any).showOpenFilePicker({
-          types: [{
-            description: 'LCH Photos Backup',
-            accept: { 'application/json': ['.lchp', '.json'] },
-          }],
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.lchp,.json';
+      input.style.display = 'none';
+
+      const fileSelectedPromise = new Promise<File | null>((resolve) => {
+        input.onchange = (e: any) => {
+          const file = e.target.files?.[0] || null;
+          resolve(file);
+        };
+        // Para cuando cancelan en navegadores o Electron que cierran sin selección
+        window.addEventListener('focus', () => {
+          setTimeout(() => {
+            if (!input.files || input.files.length === 0) {
+              resolve(null);
+            }
+          }, 600);
+        }, { once: true });
+      });
+
+      document.body.appendChild(input);
+      input.click();
+      document.body.removeChild(input);
+
+      const file = await fileSelectedPromise;
+      if (!file) return;
+
+      const content = await file.text();
+      const backupData = JSON.parse(content);
+
+      if (!backupData.photos || !Array.isArray(backupData.photos)) {
+        throw new Error("Formato de archivo .lchp inválido.");
+      }
+
+      let imported = 0;
+      for (const photo of backupData.photos) {
+        if (photo.id && photo.base64Data) {
+          await photoDB.savePhoto(photo.id, projectId, photo.base64Data);
+          imported++;
+        }
+      }
+
+      // Si el backup contiene metadatos completos de las entradas (formato extendido V2)
+      const backupEntries = backupData.entries || [];
+
+      captureHistory();
+      setProjects(prev => prev.map(p => {
+        if (String(p.id) !== String(projectId)) return p;
+        
+        const currentEntries = p.logiEntries || [];
+        const updatedEntries = [...currentEntries];
+
+        // 1. Integrar o actualizar las entradas del archivo .lchp V2
+        backupEntries.forEach((newEntry: any) => {
+          const existingIdx = updatedEntries.findIndex(e => String(e.id) === String(newEntry.id));
+          const hasLocalPhoto = backupData.photos.some((ph: any) => String(ph.id) === String(newEntry.id));
+          
+          const entryToUpsert = {
+            id: String(newEntry.id),
+            date: newEntry.date || new Date().toISOString().split('T')[0],
+            itemCode: String(newEntry.itemCode || "").trim(),
+            description: String(newEntry.description || "").trim(),
+            imageUrl: "",
+            isLocal: hasLocalPhoto ? true : !!newEntry.isLocal,
+            status: (newEntry.status || 'pending') as 'pending' | 'integrated'
+          };
+
+          if (existingIdx >= 0) {
+            const localEntry = updatedEntries[existingIdx];
+            updatedEntries[existingIdx] = {
+              ...localEntry,
+              ...entryToUpsert,
+              itemCode: (localEntry.itemCode && localEntry.itemCode.trim()) ? localEntry.itemCode : entryToUpsert.itemCode,
+              description: (localEntry.description && localEntry.description.trim()) ? localEntry.description : entryToUpsert.description,
+              // Si la entrada existente ya estaba integrada en CONTROL, preservar su status 'integrated'
+              status: localEntry.status === 'integrated' ? 'integrated' : entryToUpsert.status
+            };
+          } else {
+            updatedEntries.push(entryToUpsert);
+          }
         });
 
-        const file = await handle.getFile();
-        const content = await file.text();
-        const backupData = JSON.parse(content);
-
-        if (!backupData.photos || !Array.isArray(backupData.photos)) {
-          throw new Error("Formato de archivo .lchp inválido.");
-        }
-
-        let imported = 0;
-        for (const photo of backupData.photos) {
-          if (photo.id && photo.base64Data) {
-            await photoDB.savePhoto(photo.id, projectId, photo.base64Data);
-            imported++;
+        // 2. Para las entradas existentes que no venían en 'entries' (ej: V1 antiguo) pero su foto sí está en 'photos',
+        // marcarlas como isLocal: true
+        const finalEntries = updatedEntries.map(e => {
+          const hasLocalPhoto = backupData.photos.some((ph: any) => String(ph.id) === String(e.id));
+          if (hasLocalPhoto) {
+            return { ...e, isLocal: true };
           }
-        }
+          return e;
+        });
 
-        // Si el backup contiene metadatos completos de las entradas (formato extendido V2)
-        const backupEntries = backupData.entries || [];
+        return { ...p, logiEntries: finalEntries };
+      }));
 
-        captureHistory();
-        setProjects(prev => prev.map(p => {
-          if (String(p.id) !== String(projectId)) return p;
-          
-          const currentEntries = p.logiEntries || [];
-          const updatedEntries = [...currentEntries];
-
-          // 1. Integrar o actualizar las entradas del archivo .lchp V2
-          backupEntries.forEach((newEntry: any) => {
-            const existingIdx = updatedEntries.findIndex(e => String(e.id) === String(newEntry.id));
-            const hasLocalPhoto = backupData.photos.some((ph: any) => String(ph.id) === String(newEntry.id));
-            
-            const entryToUpsert = {
-              id: String(newEntry.id),
-              date: newEntry.date || new Date().toISOString().split('T')[0],
-              itemCode: String(newEntry.itemCode || "").trim(),
-              description: String(newEntry.description || "").trim(),
-              imageUrl: "",
-              isLocal: hasLocalPhoto ? true : !!newEntry.isLocal,
-              status: (newEntry.status || 'pending') as 'pending' | 'integrated'
-            };
-
-            if (existingIdx >= 0) {
-              const localEntry = updatedEntries[existingIdx];
-              updatedEntries[existingIdx] = {
-                ...localEntry,
-                ...entryToUpsert,
-                itemCode: (localEntry.itemCode && localEntry.itemCode.trim()) ? localEntry.itemCode : entryToUpsert.itemCode,
-                description: (localEntry.description && localEntry.description.trim()) ? localEntry.description : entryToUpsert.description,
-                // Si la entrada existente ya estaba integrada en CONTROL, preservar su status 'integrated'
-                status: localEntry.status === 'integrated' ? 'integrated' : entryToUpsert.status
-              };
-            } else {
-              updatedEntries.push(entryToUpsert);
-            }
-          });
-
-          // 2. Para las entradas existentes que no venían en 'entries' (ej: V1 antiguo) pero su foto sí está en 'photos',
-          // marcarlas como isLocal: true
-          const finalEntries = updatedEntries.map(e => {
-            const hasLocalPhoto = backupData.photos.some((ph: any) => String(ph.id) === String(e.id));
-            if (hasLocalPhoto) {
-              return { ...e, isLocal: true };
-            }
-            return e;
-          });
-
-          return { ...p, logiEntries: finalEntries };
-        }));
-
-        const hasEntries = backupEntries.length > 0;
-        if (hasEntries) {
-          alert(`Sincronización finalizada exitosamente.\n\nSe importaron ${imported} fotos y se actualizaron/crearon ${backupEntries.length} entradas de registro en CONTROL.`);
-        } else {
-          alert(`Se han importado ${imported} fotos exitosamente a la base local (V1 Legacy).`);
-        }
+      const hasEntries = backupEntries.length > 0;
+      if (hasEntries) {
+        alert(`Sincronización finalizada exitosamente.\n\nSe importaron ${imported} fotos y se actualizaron/crearon ${backupEntries.length} entradas de registro en CONTROL.`);
       } else {
-        alert("Tu navegador no soporta la carga de archivos. Intenta usar Chrome o Edge.");
+        alert(`Se han importado ${imported} fotos exitosamente a la base local (V1 Legacy).`);
       }
     } catch (error: any) {
-      if (error.name !== 'AbortError') {
-        console.error("Error importando fotos", error);
-        alert("Error al intentar cargar el archivo .lchp.");
-      }
+      console.error("Error importando fotos", error);
+      alert("Error al intentar cargar el archivo .lchp: " + (error.message || String(error)));
     }
   };
 
@@ -1565,6 +1678,8 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
       getPhotoLocalUrl,
       currentView,
       setCurrentView,
+      costsActiveTab,
+      setCostsActiveTab,
       selectedPhotoId,
       setSelectedPhotoId,
       updateLogiEntry,

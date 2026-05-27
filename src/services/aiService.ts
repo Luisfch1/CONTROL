@@ -153,8 +153,12 @@ const addAuditLog = (log: Omit<ApiAuditLog, 'id' | 'timestamp'>) => {
 
   // Escribir logs de API localmente para depuración en el espacio de trabajo
   if ((window as any).electronAPI && typeof (window as any).electronAPI.writeFile === 'function') {
-    (window as any).electronAPI.writeFile('c:/Users/ingen/Documents/APPS/Antigravity/Control/api_logs.json', JSON.stringify(apiAuditLogs, null, 2))
-      .catch((err: any) => console.error("Error writing api_logs.json:", err));
+    try {
+      (window as any).electronAPI.writeFile('c:/Users/ingen/Documents/APPS/Antigravity/Control/api_logs.json', JSON.stringify(apiAuditLogs, null, 2))
+        .catch((err: any) => console.error("Error writing api_logs.json:", err));
+    } catch (e) {
+      console.error("Error serializing API logs:", e);
+    }
   }
 };
 
@@ -820,5 +824,226 @@ No agregues preámbulos, no agregues bloques de código de markdown como \`\`\`j
   }
 
   throw lastError || new Error("Error analizando el PDF.");
+};
+
+export interface ExtractedAPUItem {
+  itemCode: string;
+  materials: { description: string; unit: string; quantity: number; price: number; total: number }[];
+  labor: { description: string; unit: string; quantity: number; price: number; total: number }[];
+  equipment: { description: string; unit: string; quantity: number; price: number; total: number }[];
+  transport: { description: string; unit: string; quantity: number; price: number; total: number }[];
+}
+
+export const extractApusFromPdf = async (
+  base64Pdf: string,
+  contractItemsContext: { item: string; descripcion: string }[],
+  optionsApiKey?: string,
+  onProgress?: (current: number, total: number) => void
+): Promise<ExtractedAPUItem[]> => {
+  const apiKey = getApiKey(optionsApiKey);
+  if (!apiKey) {
+    throw new Error("🔑 Falta configurar la API Key de Gemini.");
+  }
+
+  if (!contractItemsContext || contractItemsContext.length === 0) {
+    return [];
+  }
+
+  // Dividimos en bloques de máximo 8 actividades para evitar exceder el límite de tokens de salida y prevenir JSON truncados
+  const chunkSize = 8;
+  const chunks: { item: string; descripcion: string }[][] = [];
+  for (let i = 0; i < contractItemsContext.length; i += chunkSize) {
+    chunks.push(contractItemsContext.slice(i, i + chunkSize));
+  }
+
+  const allResults: ExtractedAPUItem[] = [];
+
+  for (let chunkIdx = 0; chunkIdx < chunks.length; chunkIdx++) {
+    const currentChunk = chunks[chunkIdx];
+    if (onProgress) {
+      onProgress(chunkIdx + 1, chunks.length);
+    }
+
+    const chunkResults = await executeSingleApuPdfExtraction(base64Pdf, currentChunk, apiKey);
+    allResults.push(...chunkResults);
+  }
+
+  return allResults;
+};
+
+// Función auxiliar para extraer APUs de un bloque específico de actividades
+const executeSingleApuPdfExtraction = async (
+  base64Pdf: string,
+  chunkItems: { item: string; descripcion: string }[],
+  apiKey: string
+): Promise<ExtractedAPUItem[]> => {
+  interface Candidate {
+    name: string;
+    url: string;
+  }
+
+  const candidates: Candidate[] = [
+    {
+      name: 'v1beta / gemini-3.1-flash-lite',
+      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`,
+    },
+    {
+      name: 'v1beta / gemini-2.5-flash-lite',
+      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`,
+    },
+    {
+      name: 'v1beta / gemini-2.5-flash',
+      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+    }
+  ];
+
+  try {
+    const lastSuccessful = localStorage.getItem('gemini-last-successful-candidate');
+    if (lastSuccessful) {
+      const idx = candidates.findIndex(c => c.name === lastSuccessful);
+      if (idx > 0) {
+        const [matched] = candidates.splice(idx, 1);
+        candidates.unshift(matched);
+      }
+    }
+  } catch (e) {}
+
+  let lastError: any = null;
+  const cleanBase64 = base64Pdf.includes(',') ? base64Pdf.split(',')[1] : base64Pdf;
+
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i];
+    const startTime = Date.now();
+    console.log(`[APU PDF Chunk Analysis] Intentando bloque de ${chunkItems.length} actividades con candidato: ${candidate.name}...`);
+
+    try {
+      const requestBody = {
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                inlineData: {
+                  mimeType: 'application/pdf',
+                  data: cleanBase64
+                }
+              },
+              {
+                text: `Analiza este documento PDF que contiene el desglose de Análisis de Precios Unitarios (APU) de obra.
+El objetivo es extraer los insumos de cada APU encontrado y asociarlos con una de las actividades del presupuesto del contrato de la obra.
+
+SOLO debes extraer los APUs que correspondan a las siguientes actividades del presupuesto del contrato de la obra (ignora cualquier otra actividad del PDF que no esté en este listado):
+${JSON.stringify(chunkItems)}
+
+Por favor, lee el PDF y para cada APU identificado en el documento que coincida con una de estas actividades del contrato, realiza lo siguiente:
+1. Encuentra la actividad del contrato que mejor coincida semánticamente con el APU del PDF (basado en descripción o código de ítem).
+2. Clasifica sus insumos en cuatro listas: materials, labor, equipment y transport.
+3. Para cada insumo, extrae:
+   - description: Nombre o descripción clara del insumo.
+   - unit: Unidad de medida (ej. Gl, m3, Kg, h, und, bto).
+   - quantity: Cantidad o rendimiento necesario por unidad de actividad (debe ser un número).
+   - price: Precio unitario del insumo (debe ser un número).
+   - total: Costo total del insumo (quantity * price, debe ser un número).
+
+Responde ÚNICA y EXCLUSIVAMENTE con un objeto JSON válido con la siguiente estructura (no incluyas formato markdown \`\`\`json ni preámbulos):
+{
+  "apus": [
+    {
+      "itemCode": "Código de la actividad mapeada (ej: NP 01)",
+      "materials": [
+        {"description": "Cemento gris", "unit": "bto", "quantity": 0.5, "price": 31000, "total": 15500}
+      ],
+      "labor": [
+        {"description": "Oficial de obra", "unit": "h", "quantity": 2.5, "price": 12000, "total": 30000}
+      ],
+      "equipment": [
+        {"description": "Mezcladora", "unit": "h", "quantity": 0.25, "price": 15000, "total": 3750}
+      ],
+      "transport": [
+        {"description": "Volqueta (acarreo)", "unit": "m3-km", "quantity": 1.0, "price": 5000, "total": 5000}
+      ]
+    }
+  ]
+}`
+              }
+            ]
+          }
+        ],
+        generationConfig: {
+          temperature: 0.1,
+          responseMimeType: "application/json",
+          maxOutputTokens: 8192
+        }
+      };
+
+      const response = await fetch(candidate.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      if (!response.ok) {
+        let errMsg = `HTTP ${response.status}`;
+        try {
+          const errJson = await response.json();
+          if (errJson.error?.message) errMsg = errJson.error.message;
+        } catch (_) {}
+        throw new Error(errMsg);
+      }
+
+      const data = await response.json();
+      const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (textResponse !== undefined) {
+        try {
+          let cleanText = textResponse.trim();
+          if (cleanText.startsWith('```')) {
+            cleanText = cleanText.replace(/^```json\s*/, '').replace(/```$/, '').trim();
+          }
+          const parsed = JSON.parse(cleanText);
+          
+          if (!parsed.apus || !Array.isArray(parsed.apus)) {
+            throw new Error("La respuesta no contiene un arreglo 'apus'.");
+          }
+
+          const sanitizeList = (arr: any) => {
+            if (!Array.isArray(arr)) return [];
+            return arr.map((item: any) => ({
+              description: String(item.description || 'Insumo sin nombre'),
+              unit: String(item.unit || 'und'),
+              quantity: Number(item.quantity ?? 0),
+              price: Number(item.price ?? 0),
+              total: Number(item.total ?? 0)
+            }));
+          };
+
+          const resultList = parsed.apus.map((apu: any) => ({
+            itemCode: String(apu.itemCode || ''),
+            materials: sanitizeList(apu.materials),
+            labor: sanitizeList(apu.labor),
+            equipment: sanitizeList(apu.equipment),
+            transport: sanitizeList(apu.transport)
+          }));
+
+          // Guardar candidato exitoso
+          try {
+            localStorage.setItem('gemini-last-successful-candidate', candidate.name);
+          } catch (e) {}
+
+          return resultList;
+        } catch (jsonErr) {
+          console.error("Failed to parse JSON response from Gemini for APU PDF:", textResponse, jsonErr);
+          throw new Error("La respuesta del modelo no tiene formato JSON válido.");
+        }
+      }
+      throw new Error("No se obtuvo respuesta del modelo.");
+    } catch (err) {
+      console.error(`[APU PDF Extraction Chunk] Failed with ${candidate.name}:`, err);
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error("Error extrayendo APUs desde el PDF.");
 };
 

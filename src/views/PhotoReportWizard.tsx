@@ -210,6 +210,7 @@ export default function PhotoReportWizard({ onClose, savedReport }: PhotoReportW
         dateTo,
         itemFilter,
         textFilter,
+        photos: reportPhotos,
         onProgress: (p) => setExportProgress(p)
       });
     } catch (error) {
@@ -229,6 +230,7 @@ export default function PhotoReportWizard({ onClose, savedReport }: PhotoReportW
         dateTo,
         itemFilter,
         textFilter,
+        photos: reportPhotos,
         onProgress: (p) => setZipProgress(p)
       });
       alert(`¡Éxito! Se ha generado y descargado el archivo ZIP.`);

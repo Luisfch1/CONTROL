@@ -43,6 +43,110 @@ ipcMain.handle('write-file', async (event, filePath, content) => {
   }
 });
 
+// Helpers y manejadores para almacenamiento de oficios en la carpeta del usuario
+const getCorrespondenceDir = (projectId) => {
+  const dir = path.join(os.homedir(), 'Documents', 'CONTROL_Oficios', projectId);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+};
+
+ipcMain.handle('save-correspondence-file', async (event, projectId, fileName, base64Data) => {
+  try {
+    const dir = getCorrespondenceDir(projectId);
+    const filePath = path.join(dir, fileName);
+    const cleanBase64 = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
+    fs.writeFileSync(filePath, Buffer.from(cleanBase64, 'base64'));
+    return filePath;
+  } catch (error) {
+    console.error("Error saving correspondence file to disk:", error);
+    return null;
+  }
+});
+
+ipcMain.handle('read-correspondence-file', async (event, projectId, fileName) => {
+  try {
+    const dir = getCorrespondenceDir(projectId);
+    const filePath = path.join(dir, fileName);
+    if (fs.existsSync(filePath)) {
+      const buffer = fs.readFileSync(filePath);
+      return `data:application/pdf;base64,${buffer.toString('base64')}`;
+    }
+    return null;
+  } catch (error) {
+    console.error("Error reading correspondence file from disk:", error);
+    return null;
+  }
+});
+
+ipcMain.handle('delete-correspondence-file', async (event, projectId, fileName) => {
+  try {
+    const dir = getCorrespondenceDir(projectId);
+    const filePath = path.join(dir, fileName);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error("Error deleting correspondence file from disk:", error);
+    return false;
+  }
+});
+
+// Helpers y manejadores para almacenamiento de APUs en la carpeta del usuario
+const getApuDir = (projectId) => {
+  const dir = path.join(os.homedir(), 'Documents', 'CONTROL_APUs', projectId);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+};
+
+ipcMain.handle('save-apu-file', async (event, projectId, fileName, base64Data) => {
+  try {
+    const dir = getApuDir(projectId);
+    const filePath = path.join(dir, fileName);
+    const cleanBase64 = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
+    fs.writeFileSync(filePath, Buffer.from(cleanBase64, 'base64'));
+    return filePath;
+  } catch (error) {
+    console.error("Error saving APU file to disk:", error);
+    return null;
+  }
+});
+
+ipcMain.handle('read-apu-file', async (event, projectId, fileName) => {
+  try {
+    const dir = getApuDir(projectId);
+    const filePath = path.join(dir, fileName);
+    if (fs.existsSync(filePath)) {
+      const buffer = fs.readFileSync(filePath);
+      return `data:application/pdf;base64,${buffer.toString('base64')}`;
+    }
+    return null;
+  } catch (error) {
+    console.error("Error reading APU file from disk:", error);
+    return null;
+  }
+});
+
+ipcMain.handle('delete-apu-file', async (event, projectId, fileName) => {
+  try {
+    const dir = getApuDir(projectId);
+    const filePath = path.join(dir, fileName);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error("Error deleting APU file from disk:", error);
+    return false;
+  }
+});
+
 ipcMain.handle('start-sync-server', async (event) => {
   if (httpServer) {
     return { ips: getLocalIPs(), port: httpServer.address().port };
@@ -241,6 +345,9 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
+    if (isDev) {
+      mainWindow.webContents.openDevTools();
+    }
     
     // Si se abrió con un archivo .lch (Windows)
     // IMPORTANTE: delay de 1000ms para que React monte y registre el listener onOpenFile

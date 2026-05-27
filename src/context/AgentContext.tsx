@@ -174,21 +174,37 @@ export const AgentProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             const currentTodos = activeProject.agentTodos || [];
             const activeCurrent = currentTodos.filter(t => !t.completed);
             
-            const activeTexts = activeCurrent.map(t => t.text.toLowerCase().trim()).sort().join('|');
-            const parsedTexts = parsed.map(t => t.text.toLowerCase().trim()).sort().join('|');
+            let hasNewTasksInFile = false;
+            const updatedTodos = [...currentTodos];
             
-            if (activeTexts !== parsedTexts) {
-              console.log('[Agent Memory] Sincronizando pendientes desde:', targetPath);
-              const updatedTodos = parsed.map((p, idx) => {
-                const existing = activeCurrent.find(t => t.text.toLowerCase().trim() === p.text.toLowerCase().trim());
-                return existing || {
+            parsed.forEach((p, idx) => {
+              const exists = currentTodos.some(t => t.text.toLowerCase().trim() === p.text.toLowerCase().trim());
+              if (!exists) {
+                updatedTodos.push({
                   id: `todo-${Date.now()}-${idx}`,
                   text: p.text,
                   createdAt: p.createdAt,
                   completed: false
-                };
-              });
+                });
+                hasNewTasksInFile = true;
+              }
+            });
+
+            let hasMissingTasksInFile = false;
+            activeCurrent.forEach(t => {
+              const existsInFile = parsed.some(p => p.text.toLowerCase().trim() === t.text.toLowerCase().trim());
+              if (!existsInFile) {
+                hasMissingTasksInFile = true;
+              }
+            });
+
+            if (hasNewTasksInFile) {
+              console.log('[Agent Memory] Agregando nuevas tareas de PENDIENTES.md a la memoria');
               updateProject(activeProjectId, { agentTodos: updatedTodos });
+              updateTodosFile(updatedTodos, activeProject.filePath);
+            } else if (hasMissingTasksInFile) {
+              console.log('[Agent Memory] Sincronizando pendientes de memoria hacia PENDIENTES.md');
+              updateTodosFile(currentTodos, activeProject.filePath);
             }
           }
         })
@@ -233,24 +249,40 @@ export const AgentProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             const currentTodos = activeProject.agentTodos || [];
             const activeCurrent = currentTodos.filter(t => !t.completed);
             
-            const activeTexts = activeCurrent.map(t => t.text.toLowerCase().trim()).sort().join('|');
-            const parsedTexts = parsed.map(t => t.text.toLowerCase().trim()).sort().join('|');
+            let hasNewTasksInFile = false;
+            const updatedTodos = [...currentTodos];
             
-            if (activeTexts !== parsedTexts) {
-              console.log('[Agent Memory] Sincronizando pendientes a memoria desde:', targetPath);
-              const updatedTodos = parsed.map((p, idx) => {
-                const existing = activeCurrent.find(t => t.text.toLowerCase().trim() === p.text.toLowerCase().trim());
-                return existing || {
+            parsed.forEach((p, idx) => {
+              const exists = currentTodos.some(t => t.text.toLowerCase().trim() === p.text.toLowerCase().trim());
+              if (!exists) {
+                updatedTodos.push({
                   id: `todo-${Date.now()}-${idx}`,
                   text: p.text,
                   createdAt: p.createdAt,
                   completed: false
-                };
-              });
+                });
+                hasNewTasksInFile = true;
+              }
+            });
+
+            let hasMissingTasksInFile = false;
+            activeCurrent.forEach(t => {
+              const existsInFile = parsed.some(p => p.text.toLowerCase().trim() === t.text.toLowerCase().trim());
+              if (!existsInFile) {
+                hasMissingTasksInFile = true;
+              }
+            });
+
+            if (hasNewTasksInFile) {
+              console.log('[Agent Memory] Agregando nuevas tareas de PENDIENTES.md a la memoria');
               updateProject(activeProjectId, { agentTodos: updatedTodos });
+              updateTodosFile(updatedTodos, activeProject.filePath);
+            } else if (hasMissingTasksInFile) {
+              console.log('[Agent Memory] Sincronizando pendientes de memoria hacia PENDIENTES.md');
+              updateTodosFile(currentTodos, activeProject.filePath);
             }
           } else {
-            // Si el archivo no existe, lo creamos
+            // Si el archivo no existe o está vacío, lo creamos con lo de memoria
             updateTodosFile(activeProject.agentTodos || [], activeProject.filePath);
           }
         })
