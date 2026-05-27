@@ -233,6 +233,57 @@ Actualmente no hay ningún proyecto cargado en el viewport de CONTROL. Solicita 
     return `* Transacción [${t.date}] | Ítem: ${t.itemCode} | Tipo: ${t.resourceType} | Desc: ${t.description} | Cantidad: ${t.quantity} | Vlr Unitario: $${t.unitPrice.toLocaleString('es-CO')} | Vlr Total: $${t.totalPrice.toLocaleString('es-CO')}${t.provider ? ` | Proveedor: ${t.provider}` : ''}${t.invoiceNumber ? ` | Factura: ${t.invoiceNumber}` : ''}`;
   }).join('\n');
 
+  // Formatear base de datos comparativa de insumos y recursos (Venta APU vs. Costo Real)
+  const resourceComparisons: string[] = [];
+  const resources = project.costResources || [];
+  const apus = project.activityAPUs || [];
+  const transactions = project.costTransactions || [];
+
+  resources.forEach(res => {
+    // 1. Buscar precio de venta (APU) de este recurso en las actividades del contrato
+    const apuOccurrences: { itemCode: string; contractPrice: number }[] = [];
+    apus.forEach(apu => {
+      const matchInList = (list: any[]) => {
+        return list.find(item => 
+          item.description.trim().toLowerCase() === res.description.trim().toLowerCase()
+        );
+      };
+      
+      const matchedRes = matchInList(apu.materials) || matchInList(apu.labor) || matchInList(apu.equipment) || matchInList(apu.transport);
+      if (matchedRes) {
+        apuOccurrences.push({
+          itemCode: apu.itemCode,
+          contractPrice: matchedRes.price
+        });
+      }
+    });
+
+    // 2. Buscar transacciones de compra reales (Facturas) para este recurso
+    const txPrices = transactions
+      .filter(tx => tx.resourceId === res.id || tx.description.trim().toLowerCase() === res.description.trim().toLowerCase())
+      .map(tx => tx.unitPrice);
+      
+    const avgRealPrice = txPrices.length > 0
+      ? txPrices.reduce((a, b) => a + b, 0) / txPrices.length
+      : 0;
+
+    const apuPricesStr = apuOccurrences.length > 0
+      ? apuOccurrences.map(o => `Actividad [${o.itemCode}]: $${o.contractPrice.toLocaleString('es-CO')}`).join(', ')
+      : 'No registrado en APUs de obra (Venta)';
+      
+    const realPricesStr = txPrices.length > 0
+      ? `Real Promedio Compra: $${avgRealPrice.toLocaleString('es-CO')} (${txPrices.length} transac.)`
+      : 'Sin compras/facturas registradas';
+
+    resourceComparisons.push(
+      `* RECURSO [${res.code}] "${res.description}" (Tipo: ${res.type} | Unidad: ${res.unit})
+      - Precio Estimado de Costo (Insumo Ref): $${res.referencePrice.toLocaleString('es-CO')}
+      - Precio de Venta Cobrado al Cliente (APUs): ${apuPricesStr}
+      - Costo Unitario de Compra Real (Facturado): ${realPricesStr}`
+    );
+  });
+  const resourceComparisonsFormatted = resourceComparisons.join('\n\n');
+
   const customInstructionsSegment = project.agentCustomInstructions
     ? `\n\nINSTRUCCIONES ADICIONALES CONFIGURADAS POR EL USUARIO (MÁXIMA PRIORIDAD):\n${project.agentCustomInstructions}\n`
     : '';
@@ -253,6 +304,10 @@ DIRECTRICES DE DISEÑO Y MARCA LCH INGENIERÍA (OBLIGATORIO):
    - Queda estrictamente PROHIBIDO inyectar etiquetas HTML físicas (ej. <div style="...">, <span>, <p>, etc.) en tus respuestas ordinarias de texto en el chat.
    - Tampoco utilices bloques de código HTML crudos o estilos CSS en línea dentro de tu conversación.
    - Estructura todas tus respuestas utilizando ÚNICAMENTE sintaxis Markdown estándar limpia (negritas, cursivas, listas con asteriscos, o tablas nativas en Markdown). El uso de HTML crudo causa que el motor de renderizado falle o muestre texto cortado.
+6. REGLA CRÍTICA DE COMPARACIÓN DE VENTAS (INGRESOS APU) VS. COSTOS REALES:
+   - Los valores que nos pagan (Ingresos / Venta) provienen exclusivamente de los APUs ("ANÁLISIS DE PRECIOS UNITARIOS (APUS) POR ACTIVIDAD" o "VALOR DE VENTA EN CONTRATO").
+   - Los valores que pagamos a proveedores y personal (Costos Reales / Egreso) provienen de las facturas/transacciones ("REGISTRO DE COSTOS REALES GENERADOS (TRANSACCIONES)" o "COSTO DE COMPRA REAL").
+   - El agente debe diferenciar estrictamente el valor cobrado al cliente (APU) del costo de adquisición real (factura/egreso) para cualquier cálculo de utilidades, análisis de margen, o desviación de precios.
 
 INFORMACIÓN COMPLETA DEL PROYECTO ACTIVO (.LCH):
 - Nombre del Proyecto: ${project.name}
@@ -287,6 +342,8 @@ ${costResourcesFormatted || 'No hay recursos registrados en la base de datos.'}
 
 REGISTRO DE COSTOS REALES GENERADOS (TRANSACCIONES):
 ${costTransactionsFormatted || 'No hay transacciones de costos reales registradas.'}
+
+BASE DE DATOS COMPARATIVA DE RECURSOS (PRECIOS DE VENTA AL CLIENTE VS. PRECIOS DE COSTO DE ADQUISICIÓN):
+${resourceComparisonsFormatted || 'No hay recursos cargados para generar comparación.'}
 `;
 }
-
