@@ -1553,8 +1553,8 @@ export default function CostsView() {
                      >
                        <option value="">-- Selecciona Actividad --</option>
                        {contractItems.map(bi => (
-                         <option key={bi.item} value={bi.item}>
-                           {bi.item} - {bi.descripcion}
+                         <option key={bi.item} value={bi.item} title={`${bi.item} - ${bi.descripcion}`}>
+                           {bi.item} - {bi.descripcion.length > 50 ? bi.descripcion.substring(0, 50) + '...' : bi.descripcion}
                          </option>
                        ))}
                      </select>
@@ -1578,8 +1578,8 @@ export default function CostsView() {
                      >
                        <option value="">-- Sin insumo (Texto libre) --</option>
                        {sortedAndFilteredResources.map(cr => (
-                         <option key={cr.id} value={cr.id}>
-                           [{cr.code}] {cr.description} ({cr.unit})
+                         <option key={cr.id} value={cr.id} title={`[${cr.code}] ${cr.description}`}>
+                           [{cr.code}] {cr.description.length > 50 ? cr.description.substring(0, 50) + '...' : cr.description} ({cr.unit})
                          </option>
                        ))}
                      </select>
@@ -1913,7 +1913,7 @@ export default function CostsView() {
               </div>
 
               {/* Filtro y selector de ítem activo */}
-              <div style={{ display: 'flex', gap: '8px', flex: 1, minWidth: '320px', alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '0.75rem', color: 'hsl(var(--text-secondary))', fontWeight: 'bold' }}>
                   {controlSubTab === 'activities' ? 'Actividad:' : 'Insumo:'}
                 </span>
@@ -1934,7 +1934,7 @@ export default function CostsView() {
                     value={selectedControlItemCode}
                     onChange={(e) => setSelectedControlItemCode(e.target.value)}
                     className="input-field"
-                    style={{ padding: '6px 10px', fontSize: '0.75rem', margin: 0, flex: 1, height: '32px', maxWidth: '350px' }}
+                    style={{ padding: '6px 10px', fontSize: '0.75rem', margin: 0, height: '32px', width: '300px', maxWidth: '100%' }}
                   >
                     <option value="">-- Selecciona una Actividad --</option>
                     {contractItems
@@ -1943,8 +1943,8 @@ export default function CostsView() {
                         bi.descripcion.toLowerCase().includes(searchCompareText.toLowerCase())
                       )
                       .map(bi => (
-                        <option key={bi.item} value={bi.item}>
-                          {bi.item} - {bi.descripcion}
+                        <option key={bi.item} value={bi.item} title={`${bi.item} - ${bi.descripcion}`}>
+                          {bi.item} - {bi.descripcion.length > 50 ? bi.descripcion.substring(0, 50) + '...' : bi.descripcion}
                         </option>
                       ))
                     }
@@ -1954,7 +1954,7 @@ export default function CostsView() {
                     value={selectedCompareResId}
                     onChange={(e) => setSelectedCompareResId(e.target.value)}
                     className="input-field"
-                    style={{ padding: '6px 10px', fontSize: '0.75rem', margin: 0, flex: 1, height: '32px', maxWidth: '350px' }}
+                    style={{ padding: '6px 10px', fontSize: '0.75rem', margin: 0, height: '32px', width: '300px', maxWidth: '100%' }}
                   >
                     <option value="">-- Selecciona un Insumo --</option>
                     {[...costResources]
@@ -1964,8 +1964,8 @@ export default function CostsView() {
                         cr.description.toLowerCase().includes(searchCompareText.toLowerCase())
                       )
                       .map(cr => (
-                        <option key={cr.id} value={cr.id}>
-                          [{cr.code}] {cr.description} ({cr.unit})
+                        <option key={cr.id} value={cr.id} title={`[${cr.code}] ${cr.description}`}>
+                          [{cr.code}] {cr.description.length > 50 ? cr.description.substring(0, 50) + '...' : cr.description} ({cr.unit})
                         </option>
                       ))
                     }
