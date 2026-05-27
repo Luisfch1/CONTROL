@@ -1,0 +1,11 @@
+node_modules
+dist
+dist-electron
+build
+out
+.git
+Insumos Luis
+backups
+scratch
+api_logs.json
+*.log

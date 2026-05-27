@@ -228,7 +228,7 @@ export default function DashboardView() {
       <header className="dash-header">
         <div className="dash-header-main-capsule">
           <div className="dash-header-title-section">
-            <h1 className="dash-project-title">I.E. MANUELA BELTRÁN</h1>
+            <h1 className="dash-project-title">{project.name.toUpperCase()}</h1>
             <div className="dash-project-subtitle">PROYECTO ACTIVO</div>
           </div>
           <div className="dash-header-meta-section">

@@ -120,9 +120,11 @@ export const exportPhotosToWord = async (project: Project, options: ExportOption
         // Resolver foto local directo de IndexedDB para Word
         const localB64 = await photoDB.getPhoto(photo.id);
         if (localB64) {
+          const mimeMatch = localB64.match(/^data:([^;]+);base64,/);
+          const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
           const base64Data = localB64.startsWith('data:') ? localB64.split(',')[1] : localB64;
           const cid = `img_${++imageCounter}@logi`;
-          mhtmlImages.push({ cid, data: base64Data, mime: 'image/jpeg' });
+          mhtmlImages.push({ cid, data: base64Data, mime });
           return `cid:${cid}`;
         }
       }
@@ -331,24 +333,24 @@ export const exportPhotosToWord = async (project: Project, options: ExportOption
 
   const htmlBase64 = encodeUTF8Base64(htmlHead + htmlBody + htmlFooter);
 
-  let mhtml = `MIME-Version: 1.0\n`;
-  mhtml += `Content-Type: multipart/related; boundary="${boundary}"\n\n`;
+  let mhtml = `MIME-Version: 1.0\r\n`;
+  mhtml += `Content-Type: multipart/related; boundary="${boundary}"\r\n\r\n`;
   
-  mhtml += `--${boundary}\n`;
-  mhtml += `Content-Type: text/html; charset="utf-8"\n`;
-  mhtml += `Content-Transfer-Encoding: base64\n`;
-  mhtml += `Content-Location: file:///C:/fake/document.html\n\n`;
-  mhtml += htmlBase64.replace(/(.{76})/g, "$1\n") + '\n\n';
+  mhtml += `--${boundary}\r\n`;
+  mhtml += `Content-Type: text/html; charset="utf-8"\r\n`;
+  mhtml += `Content-Transfer-Encoding: base64\r\n`;
+  mhtml += `Content-Location: file:///C:/fake/document.html\r\n\r\n`;
+  mhtml += htmlBase64.replace(/(.{76})/g, "$1\r\n") + '\r\n\r\n';
 
   for (const img of mhtmlImages) {
-    mhtml += `--${boundary}\n`;
-    mhtml += `Content-Type: ${img.mime}\n`;
-    mhtml += `Content-Transfer-Encoding: base64\n`;
-    mhtml += `Content-Location: ${img.cid}\n\n`;
-    mhtml += img.data.replace(/(.{76})/g, "$1\n") + '\n\n';
+    mhtml += `--${boundary}\r\n`;
+    mhtml += `Content-Type: ${img.mime}\r\n`;
+    mhtml += `Content-Transfer-Encoding: base64\r\n`;
+    mhtml += `Content-Location: ${img.cid}\r\n\r\n`;
+    mhtml += img.data.replace(/(.{76})/g, "$1\r\n") + '\r\n\r\n';
   }
   
-  mhtml += `--${boundary}--\n`;
+  mhtml += `--${boundary}--\r\n`;
 
   const blob = new Blob([mhtml], { type: 'application/msword' });
   const url = URL.createObjectURL(blob);
