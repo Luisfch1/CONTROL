@@ -87,6 +87,28 @@ export interface PhotoReport {
   photoIds: string[]; // Lista de IDs de fotos que conforman este informe
 }
 
+export interface ReportStaff {
+  name: string;
+  idCard: string;
+  role: string;
+}
+
+export interface ReportConfig {
+  objetoObra?: string;
+  noContrato?: string;
+  contratistaObra?: string;
+  repLegalObra?: string;
+  nitObra?: string;
+  contratistaInterventoria?: string;
+  repLegalInterventoria?: string;
+  nitInterventoria?: string;
+  supervisorFfie?: string;
+  fiduciaria?: string;
+  jornadasTrabajo?: string;
+  personalObra?: ReportStaff[];
+  personalInterventoria?: ReportStaff[];
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -129,6 +151,7 @@ export interface Project {
   costResources?: CostResource[];
   costTransactions?: CostTransaction[];
   apuFiles?: string[];
+  reportConfig?: ReportConfig;
 }
 
 export interface APUResource {
