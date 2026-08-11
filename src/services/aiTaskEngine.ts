@@ -206,3 +206,278 @@ export const GENERATE_PROGRESS_REPORT_TOOL = {
     }
   ]
 };
+
+export const CREATE_NEW_BUDGET_TOOL = {
+  functionDeclarations: [
+    {
+      name: "create_new_budget",
+      description: "Crea una nueva versión de presupuesto o escenario comparativo en el proyecto a partir de una lista de ítems detallada.",
+      parameters: {
+        type: "OBJECT",
+        properties: {
+          versionName: {
+            type: "STRING",
+            description: "Nombre descriptivo del nuevo escenario de presupuesto (ej. 'Presupuesto Modificado V1', 'Adicionales de Obra Junio')."
+          },
+          items: {
+            type: "ARRAY",
+            description: "La lista de ítems completa que conformará esta versión de presupuesto.",
+            items: {
+              type: "OBJECT",
+              properties: {
+                item: {
+                  type: "STRING",
+                  description: "Código del ítem presupuestal (ej. '1.1', '1.2.1')."
+                },
+                descripcion: {
+                  type: "STRING",
+                  description: "Descripción de la actividad o capítulo."
+                },
+                unidad: {
+                  type: "STRING",
+                  description: "Unidad de medida (ej. M3, ML, M2, UN, GL)."
+                },
+                cantidad: {
+                  type: "NUMBER",
+                  description: "Cantidad de obra presupuestada."
+                },
+                vlrUnitario: {
+                  type: "NUMBER",
+                  description: "Precio unitario del ítem."
+                },
+                type: {
+                  type: "STRING",
+                  enum: ["item", "subtitle", "title"],
+                  description: "Tipo de fila: 'item' para actividades con precio, 'title' para capítulos principales, 'subtitle' para subcapítulos."
+                }
+              },
+              required: ["item", "descripcion", "type"]
+            }
+          }
+        },
+        required: ["versionName", "items"]
+      }
+    }
+  ]
+};
+
+export const READ_BUDGET_TOOL = {
+  functionDeclarations: [
+    {
+      name: "read_budget",
+      description: "Retorna el presupuesto activo completo del proyecto (lista de ítems, descripciones, unidades, cantidades y precios).",
+      parameters: {
+        type: "OBJECT",
+        properties: {}
+      }
+    }
+  ]
+};
+
+export const READ_PROGRESS_REPORTS_TOOL = {
+  functionDeclarations: [
+    {
+      name: "read_progress_reports",
+      description: "Retorna el histórico de todos los reportes de avance físico registrados (cantidades acumuladas ejecutadas a diferentes fechas).",
+      parameters: {
+        type: "OBJECT",
+        properties: {}
+      }
+    }
+  ]
+};
+
+export const READ_PARTIAL_REPORTS_TOOL = {
+  functionDeclarations: [
+    {
+      name: "read_partial_reports",
+      description: "Retorna el histórico de actas parciales de cobro emitidas al cliente.",
+      parameters: {
+        type: "OBJECT",
+        properties: {}
+      }
+    }
+  ]
+};
+
+export const READ_APUS_TOOL = {
+  functionDeclarations: [
+    {
+      name: "read_apus",
+      description: "Retorna el Análisis de Precios Unitarios (APUs) con el desglose de insumos (materiales, mano de obra, equipos, transporte) para las actividades del proyecto.",
+      parameters: {
+        type: "OBJECT",
+        properties: {
+          itemCode: {
+            type: "STRING",
+            description: "Código de actividad opcional para filtrar un APU específico (ej. '1.1.1'). Si no se envía, retorna todos los APUs."
+          }
+        }
+      }
+    }
+  ]
+};
+
+export const READ_COST_RESOURCES_TOOL = {
+  functionDeclarations: [
+    {
+      name: "read_cost_resources",
+      description: "Retorna el listado general de recursos e insumos con sus unidades y precios contractuales/estimados de referencia.",
+      parameters: {
+        type: "OBJECT",
+        properties: {}
+      }
+    }
+  ]
+};
+
+export const READ_COST_TRANSACTIONS_TOOL = {
+  functionDeclarations: [
+    {
+      name: "read_cost_transactions",
+      description: "Retorna el registro detallado de egresos y costos reales generados en el proyecto (transacciones, facturas y pagos a proveedores).",
+      parameters: {
+        type: "OBJECT",
+        properties: {}
+      }
+    }
+  ]
+};
+
+export const READ_CORRESPONDENCE_TOOL = {
+  functionDeclarations: [
+    {
+      name: "read_correspondence",
+      description: "Retorna el catálogo de correspondencia (oficios, actas, cartas) y correos Gmail importados, incluyendo metadatos, resúmenes IA y estado de seguimiento.",
+      parameters: {
+        type: "OBJECT",
+        properties: {}
+      }
+    }
+  ]
+};
+
+export const READ_TODOS_TOOL = {
+  functionDeclarations: [
+    {
+      name: "read_todos",
+      description: "Retorna la agenda completa de tareas pendientes y compromisos registrados para la interventoría.",
+      parameters: {
+        type: "OBJECT",
+        properties: {}
+      }
+    }
+  ]
+};
+
+export const READ_RAW_BUDGET_CHUNK_TOOL = {
+  functionDeclarations: [
+    {
+      name: "read_raw_budget_chunk",
+      description: "Lee un fragmento (chunk) del presupuesto extenso que fue pegado por el usuario (almacenado en budgetRawText).",
+      parameters: {
+        type: "OBJECT",
+        properties: {
+          lineStart: {
+            type: "NUMBER",
+            description: "Número de línea (1-indexed) desde el cual empezar a leer."
+          },
+          chunkSize: {
+            type: "NUMBER",
+            description: "Cantidad de líneas a retornar en este fragmento (ej. 20 o 30)."
+          }
+        },
+        required: ["lineStart", "chunkSize"]
+      }
+    }
+  ]
+};
+
+export const WRITE_BUDGET_DRAFT_CHUNK_TOOL = {
+  functionDeclarations: [
+    {
+      name: "write_budget_draft_chunk",
+      description: "Agrega, concatena o actualiza ítems interpretados en la versión preliminar del presupuesto (budgetDraft).",
+      parameters: {
+        type: "OBJECT",
+        properties: {
+          versionName: {
+            type: "STRING",
+            description: "Nombre de la versión del borrador (ej. 'Presupuesto Modificado V1')."
+          },
+          items: {
+            type: "ARRAY",
+            description: "Lista de ítems analizados en este bloque para agregar al borrador.",
+            items: {
+              type: "OBJECT",
+              properties: {
+                item: {
+                  type: "STRING",
+                  description: "Código del ítem (ej. '1.1', '1.2.1')."
+                },
+                descripcion: {
+                  type: "STRING",
+                  description: "Descripción de la actividad o capítulo."
+                },
+                unidad: {
+                  type: "STRING",
+                  description: "Unidad de medida (ej. M3, ML, M2, UN, GL)."
+                },
+                cantidad: {
+                  type: "NUMBER",
+                  description: "Cantidad presupuestada."
+                },
+                vlrUnitario: {
+                  type: "NUMBER",
+                  description: "Valor unitario."
+                },
+                type: {
+                  type: "STRING",
+                  enum: ["item", "subtitle", "title"],
+                  description: "Tipo de fila: 'item' para actividades, 'title' para capítulos, 'subtitle' para subcapítulos."
+                }
+              },
+              required: ["item", "descripcion", "type"]
+            }
+          }
+        },
+        required: ["versionName", "items"]
+      }
+    }
+  ]
+};
+
+export const GENERATE_EXECUTIVE_REPORT_TOOL = {
+  functionDeclarations: [
+    {
+      name: "generate_executive_report",
+      description: "Genera y descarga el Informe Ejecutivo Mensual de Interventoría en formato Word (.doc). Consolida la tabla de avance de obra, la curva S y las fotos de avance del período seleccionado. Úsalo cuando el usuario pida generar, exportar o descargar el informe ejecutivo, el informe mensual o el reporte de avance de obra.",
+      parameters: {
+        type: "OBJECT",
+        properties: {
+          selectedMonth: {
+            type: "STRING",
+            description: "Mes de corte del informe en formato YYYY-MM (ej. '2026-06'). Si no se especifica, se usa el mes actual."
+          },
+          dateFrom: {
+            type: "STRING",
+            description: "Fecha de inicio del período en formato YYYY-MM-DD (ej. '2026-06-01'). Opcional; si no se envía, se usa el primer día del mes."
+          },
+          dateTo: {
+            type: "STRING",
+            description: "Fecha de fin del período en formato YYYY-MM-DD (ej. '2026-06-30'). Opcional; si no se envía, se usa el último día del mes."
+          },
+          narrativeText: {
+            type: "STRING",
+            description: "Narrativa técnica ejecutiva que describe el estado del proyecto, avances logrados, causas de atrasos y recomendaciones técnicas. Si no se provee, se usa el texto guardado del informe si existe."
+          },
+          sCurveCaption: {
+            type: "STRING",
+            description: "Comentario analítico sobre la curva S que indica el porcentaje ejecutado vs. el programado a la fecha de corte. Si no se provee, se usa el texto guardado o se genera automáticamente."
+          }
+        },
+        required: ["selectedMonth"]
+      }
+    }
+  ]
+};

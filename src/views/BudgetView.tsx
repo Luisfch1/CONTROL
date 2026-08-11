@@ -1,12 +1,19 @@
 import { useRef, useState } from 'react';
-import { Edit, Trash2, X, Download, Upload, Smartphone, Plus, Save, History, FilePlus, ChevronDown, Folder, Copy, ArrowLeft } from 'lucide-react';
+import { Edit, Trash2, X, Download, Upload, Smartphone, Plus, Save, FilePlus, Folder, Copy, CheckCircle, AlertCircle } from 'lucide-react';
 import { useProjects } from '../context/ProjectsContext';
 import type { BudgetItem } from '../types/projectTypes';
 import { exportToExcel } from '../utils/excelExport';
+import { parseRobustNumber } from '../utils/mathUtils';
+
+const normalizeHeader = (val: any): string => {
+  if (val === null || val === undefined) return '';
+  return String(val).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+};
 
 export default function BudgetView() {
   const {
     getActiveProject,
+    updateProject,
     updateBudgetItemType,
     updateBudgetItem,
     importBudgetExcel,
@@ -33,6 +40,13 @@ export default function BudgetView() {
   const [modalMode, setModalMode] = useState<'saveAs' | 'rename' | 'create'>('saveAs');
   const [targetVersionId, setTargetVersionId] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [showDiffs, setShowDiffs] = useState(false);
+  const [importMode, setImportMode] = useState<'overwrite' | 'newScenario'>('overwrite');
+  // Modal dual para crear nuevo presupuesto
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createModalName, setCreateModalName] = useState('');
+  const [createModalMethod, setCreateModalMethod] = useState<'duplicate' | 'excel' | null>(null);
+  const excelImportRef = useRef<HTMLInputElement>(null);
   const colWidths = columnWidths.budget;
   const getColWidth = (key: string) => collapsedColumns.budget.includes(key) ? 30 : colWidths[key];
 
@@ -72,6 +86,36 @@ export default function BudgetView() {
     exportToExcel(dataToExport, `Presupuesto_${project.name.replace(/\s+/g, '_')}`, 'Presupuesto');
   };
 
+  const handleDownloadTemplate = () => {
+    const templateData = [
+      {
+        'Ítem': '1',
+        'Descripción': 'TÍTULO CAPÍTULO EJEMPLO',
+        'Unidad': '',
+        'Cantidad': '',
+        'Vr. Unitario': '',
+        'VLR. TOTAL': ''
+      },
+      {
+        'Ítem': '1.1',
+        'Descripción': 'SUBTÍTULO EJEMPLO',
+        'Unidad': '',
+        'Cantidad': '',
+        'Vr. Unitario': '',
+        'VLR. TOTAL': ''
+      },
+      {
+        'Ítem': '1.1.1',
+        'Descripción': 'Ejemplo de Actividad / Ítem contractual',
+        'Unidad': 'm2',
+        'Cantidad': 100,
+        'Vr. Unitario': 25000,
+        'VLR. TOTAL': 2500000
+      }
+    ];
+    exportToExcel(templateData, 'Plantilla_Presupuesto_CONTROL', 'Presupuesto');
+  };
+
   const handleExportLogi = () => {
     if (!project || budgetItems.length === 0) return;
 
@@ -87,6 +131,7 @@ export default function BudgetView() {
   };
 
   const handleImportExcelClick = () => {
+    setImportMode('overwrite');
     fileInputRef.current?.click();
   };
 
@@ -109,7 +154,7 @@ export default function BudgetView() {
       let headerRowIdx = -1;
       for (let i = 0; i < Math.min(20, rows.length); i++) {
         const row = rows[i];
-        if (row && typeof row[0] === 'string' && row[0].toUpperCase().includes('ITEM')) {
+        if (row && normalizeHeader(row[0]).includes('ITEM')) {
           headerRowIdx = i;
           break;
         }
@@ -118,15 +163,19 @@ export default function BudgetView() {
       if (headerRowIdx !== -1) {
         for (let i = headerRowIdx + 1; i < rows.length; i++) {
           const row = rows[i];
-          if (!row || !row[0] || !row[1]) continue;
+          if (!row) continue;
 
-          const valTotal = row[5] || row[4] || 0;
-          const vlrUnitario = Number(row[4]) || 0;
-          if (typeof valTotal === 'number') {
-            total += valTotal;
-          }
+          const itemCode = String(row[0] || '').trim();
+          const description = String(row[1] || '').trim();
 
-          const itemCode = String(row[0]);
+          // Ignorar filas de error (#N/A), vacías o con código 0
+          if (!itemCode || itemCode === '0' || itemCode === '#N/A' || description === '#N/A') continue;
+
+          const vlrUnitario = parseRobustNumber(row[4]);
+          const cantidad = parseRobustNumber(row[3]);
+          const valTotal = row[5] !== undefined ? parseRobustNumber(row[5]) : (cantidad * vlrUnitario);
+          total += valTotal;
+
           let itemType: 'title' | 'subtitle' | 'item' = 'item';
 
           if (vlrUnitario === 0) {
@@ -139,17 +188,42 @@ export default function BudgetView() {
 
           parsedItems.push({
             item: itemCode,
-            descripcion: String(row[1]),
+            descripcion: description,
             unidad: String(row[2] || 'UN'),
-            cantidad: Number(row[3]) || 0,
+            cantidad,
             vlrUnitario,
-            vlrTotal: Number(row[5] || valTotal),
+            vlrTotal: valTotal,
             type: itemType
           });
         }
       }
 
-      importBudgetExcel(project.id, parsedItems, total);
+      if (importMode === 'newScenario') {
+        createBudgetVersion(project.id, newName.trim());
+        setTimeout(() => {
+          importBudgetExcel(project.id, parsedItems, total);
+          // Auto-save physical project in electron if function exists
+          setTimeout(() => {
+            const updatedProject = getActiveProject();
+            if (updatedProject && (window as any).electronAPI && typeof (window as any).electronAPI.saveProject === 'function') {
+              (window as any).electronAPI.saveProject(updatedProject)
+                .then(() => console.log("[Excel New Version] Guardado físico automático exitoso."))
+                .catch((err: any) => console.error("Error al guardar físicamente tras Excel:", err));
+            }
+          }, 100);
+        }, 100);
+      } else {
+        importBudgetExcel(project.id, parsedItems, total);
+        // Auto-save physical project in electron if function exists
+        setTimeout(() => {
+          const updatedProject = getActiveProject();
+          if (updatedProject && (window as any).electronAPI && typeof (window as any).electronAPI.saveProject === 'function') {
+            (window as any).electronAPI.saveProject(updatedProject)
+              .then(() => console.log("[Excel Import] Guardado físico automático exitoso."))
+              .catch((err: any) => console.error("Error al guardar físicamente tras Excel:", err));
+          }
+        }, 100);
+      }
 
     } catch (error) {
       console.error("Error reading Excel:", error);
@@ -163,9 +237,98 @@ export default function BudgetView() {
 
   const handleCreateVersion = () => {
     if (!project) return;
-    setNewName(`Escenario ${new Date().toLocaleDateString()}`);
-    setModalMode('create');
-    setShowNameModal(true);
+    setCreateModalName(`Escenario ${new Date().toLocaleDateString()}`);
+    setCreateModalMethod(null);
+    setShowCreateModal(true);
+  };
+
+  const handleApplyDraft = () => {
+    if (!project || !project.budgetDraft) return;
+    const draft = project.budgetDraft;
+    createBudgetVersion(project.id, draft.versionName);
+    setTimeout(() => {
+      const activeItems = project.budgetVersions?.find(v => v.id === project.activeBudgetVersionId)?.items || project.budgetItems || [];
+      const preservedItems = draft.items.map(di => {
+        const old = activeItems.find(oi => oi.item === di.item);
+        return old ? { ...di, startDate: di.startDate || old.startDate, endDate: di.endDate || old.endDate } : di;
+      });
+      const total = preservedItems.filter(i => i.type === 'item').reduce((s, i) => s + i.vlrTotal, 0);
+      importBudgetExcel(project.id, preservedItems, total);
+      // Limpiar borrador
+      updateProject(project.id, { budgetDraft: undefined, budgetRawText: undefined });
+      if ((window as any).electronAPI?.saveProject) {
+        setTimeout(() => {
+          const updated = getActiveProject();
+          if (updated) (window as any).electronAPI.saveProject(updated).catch(console.error);
+        }, 150);
+      }
+    }, 100);
+  };
+
+  const handleDiscardDraft = () => {
+    if (!project) return;
+    updateProject(project.id, { budgetDraft: undefined, budgetRawText: undefined });
+  };
+
+  const handleCreateModalExcelChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !project) return;
+    try {
+      const { read, utils } = await import('xlsx');
+      const data = await file.arrayBuffer();
+      const workbook = read(data);
+      const sheetName = workbook.SheetNames.includes('Presupuesto') ? 'Presupuesto' : workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const rows = utils.sheet_to_json<any[]>(worksheet, { header: 1 });
+      let total = 0;
+      const parsedItems: BudgetItem[] = [];
+      let headerRowIdx = -1;
+      for (let i = 0; i < Math.min(20, rows.length); i++) {
+        const row = rows[i];
+        if (row && normalizeHeader(row[0]).includes('ITEM')) {
+          headerRowIdx = i; break;
+        }
+      }
+      if (headerRowIdx !== -1) {
+        for (let i = headerRowIdx + 1; i < rows.length; i++) {
+          const row = rows[i];
+          if (!row) continue;
+
+          const itemCode = String(row[0] || '').trim();
+          const description = String(row[1] || '').trim();
+
+          // Ignorar filas de error (#N/A), vacías o con código 0
+          if (!itemCode || itemCode === '0' || itemCode === '#N/A' || description === '#N/A') continue;
+
+          const vlrUnitario = parseRobustNumber(row[4]);
+          const cantidad = parseRobustNumber(row[3]);
+          const valTotal = row[5] !== undefined ? parseRobustNumber(row[5]) : cantidad * vlrUnitario;
+          total += valTotal;
+
+          let itemType: 'title' | 'subtitle' | 'item' = 'item';
+          if (vlrUnitario === 0) {
+            itemType = (!itemCode.includes('.') && !itemCode.trim().includes(' ')) ? 'title' : 'subtitle';
+          }
+          parsedItems.push({ item: itemCode, descripcion: description, unidad: String(row[2] || 'UN'), cantidad, vlrUnitario, vlrTotal: valTotal, type: itemType });
+        }
+      }
+      const versionName = createModalName.trim() || `Importado ${new Date().toLocaleDateString()}`;
+      createBudgetVersion(project.id, versionName);
+      setTimeout(() => {
+        importBudgetExcel(project.id, parsedItems, total);
+        setTimeout(() => {
+          const updated = getActiveProject();
+          if (updated && (window as any).electronAPI?.saveProject) {
+            (window as any).electronAPI.saveProject(updated).catch(console.error);
+          }
+        }, 100);
+      }, 100);
+      setShowCreateModal(false);
+    } catch (err) {
+      console.error('Error al leer Excel:', err);
+      alert('Error al leer el archivo Excel. Verifica el formato.');
+    }
+    if (excelImportRef.current) excelImportRef.current.value = '';
   };
 
   const handleAddNewItem = () => {
@@ -621,7 +784,51 @@ export default function BudgetView() {
          }
       `}</style>
       <div className="page-header" style={{ flexShrink: 0, minWidth: 0, overflow: 'hidden' }}>
-        <h2 className="page-title">Presupuesto</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', minWidth: 0 }}>
+          <h2 className="page-title" style={{ margin: 0 }}>Presupuesto</h2>
+          {project && effectiveVersions.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '0.65rem', color: 'hsl(var(--text-muted))', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Escenario:</span>
+              <select
+                value={project.activeBudgetVersionId || '__legacy__'}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val && val !== '__legacy__') {
+                    switchActiveVersion(project.id, val);
+                  }
+                }}
+                style={{
+                  background: 'hsla(var(--bg-tertiary), 0.7)',
+                  border: '1px solid var(--border-color)',
+                  color: 'hsl(var(--text-primary))',
+                  padding: '6px 28px 6px 12px',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '0.75rem',
+                  fontFamily: 'var(--font-technical)',
+                  fontWeight: 'bold',
+                  outline: 'none',
+                  cursor: 'pointer',
+                  appearance: 'none',
+                  WebkitAppearance: 'none',
+                  backgroundImage: `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='hsl(var(--primary-neon-hsl))' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'></polyline></svg>")`,
+                  backgroundRepeat: 'no-repeat',
+                  backgroundPosition: 'right 8px center',
+                  backgroundSize: '14px',
+                  minWidth: '160px',
+                  transition: 'all 0.2s ease'
+                }}
+                onFocus={(e) => e.target.style.borderColor = 'hsl(var(--primary-neon))'}
+                onBlur={(e) => e.target.style.borderColor = 'var(--border-color)'}
+              >
+                {effectiveVersions.map(v => (
+                  <option key={v.id} value={v.id} style={{ background: 'hsl(var(--bg-secondary))', color: '#fff' }}>
+                    {v.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
         <div className="header-actions-container" style={{ flexShrink: 0 }}>
           <input
             type="file"
@@ -691,6 +898,11 @@ export default function BudgetView() {
             <span>Importar Excel</span>
           </button>
 
+          <button className="btn btn-secondary btn-expandable" onClick={handleDownloadTemplate} title="Descargar Plantilla Excel">
+            <Download size={18} />
+            <span>Plantilla Excel</span>
+          </button>
+
           <button className="btn btn-secondary btn-expandable" onClick={handleExportExcel} disabled={!project?.budgetItems.length} title="Exportar Excel">
             <Download size={18} />
             <span>Exportar Excel</span>
@@ -733,6 +945,114 @@ export default function BudgetView() {
         </div>
       </div>
 
+      {/* === STAGING AREA: Banner de borrador IA === */}
+      {project?.budgetDraft && project.budgetDraft.items.length > 0 && (
+        <div style={{
+          background: 'linear-gradient(135deg, hsla(280, 80%, 25%, 0.6), hsla(220, 80%, 20%, 0.6))',
+          border: '1px solid hsl(280, 80%, 50%)',
+          borderRadius: '10px',
+          padding: '12px 20px',
+          marginBottom: '12px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '16px',
+          flexShrink: 0,
+          backdropFilter: 'blur(10px)',
+          boxShadow: '0 0 20px hsl(280, 80%, 40% / 0.3)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1 }}>
+            <AlertCircle size={20} color='hsl(280, 80%, 70%)' />
+            <div>
+              <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'hsl(280, 80%, 80%)' }}>
+                📋 Borrador IA pendiente: «{project.budgetDraft.versionName}»
+              </div>
+              <div style={{ fontSize: '0.7rem', color: 'hsl(280, 60%, 65%)' }}>
+                {project.budgetDraft.items.length} ítems interpretados por la IA listos para revisión
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={() => setShowDiffs(!showDiffs)}
+            style={{
+              background: 'hsla(280, 60%, 40%, 0.4)',
+              border: '1px solid hsl(280, 60%, 50%)',
+              color: 'hsl(280, 80%, 80%)',
+              padding: '6px 14px',
+              borderRadius: '8px',
+              fontSize: '0.75rem',
+              cursor: 'pointer'
+            }}
+          >
+            {showDiffs ? 'Ocultar' : 'Ver comparación'}
+          </button>
+          <button
+            onClick={handleApplyDraft}
+            style={{
+              background: 'hsl(280, 80%, 50%)',
+              border: 'none',
+              color: '#fff',
+              padding: '8px 18px',
+              borderRadius: '8px',
+              fontSize: '0.75rem',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            <CheckCircle size={14} /> Aplicar Borrador
+          </button>
+          <button
+            onClick={handleDiscardDraft}
+            style={{
+              background: 'transparent',
+              border: '1px solid hsl(0, 70%, 50%)',
+              color: 'hsl(0, 70%, 70%)',
+              padding: '6px 14px',
+              borderRadius: '8px',
+              fontSize: '0.75rem',
+              cursor: 'pointer'
+            }}
+          >
+            Descartar
+          </button>
+        </div>
+      )}
+
+      {/* === TABLA COMPARATIVA del borrador === */}
+      {showDiffs && project?.budgetDraft && project.budgetDraft.items.length > 0 && (() => {
+        const activeItems = activeVersion?.items || project.budgetItems || [];
+        const draftItems = project.budgetDraft.items;
+        const allCodes = Array.from(new Set([...activeItems.map(i => i.item), ...draftItems.map(i => i.item)]));
+        return (
+          <div style={{ background: 'hsla(var(--bg-secondary), 0.8)', border: '1px solid hsl(var(--border-color))', borderRadius: '10px', marginBottom: '12px', overflow: 'hidden', flexShrink: 0, maxHeight: '260px', overflowY: 'auto' }}>
+            <div style={{ padding: '10px 16px', borderBottom: '1px solid hsl(var(--border-color))', fontSize: '0.7rem', fontWeight: 'bold', color: 'hsl(var(--text-secondary))', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', gap: '0' }}>
+              <div style={{ flex: '0 0 80px' }}>ÍTEM</div>
+              <div style={{ flex: 1 }}>DESCRIPCIÓN</div>
+              <div style={{ flex: '0 0 100px', textAlign: 'right' }}>CANT. ACTUAL</div>
+              <div style={{ flex: '0 0 100px', textAlign: 'right' }}>CANT. NUEVA</div>
+              <div style={{ flex: '0 0 80px', textAlign: 'center' }}>ESTADO</div>
+            </div>
+            {allCodes.map(code => {
+              const cur = activeItems.find(i => i.item === code);
+              const nw = draftItems.find(i => i.item === code);
+              const status = !cur ? 'Nuevo' : !nw ? 'Eliminado' : cur.cantidad !== nw.cantidad || cur.vlrUnitario !== nw.vlrUnitario ? 'Modificado' : 'Sin cambios';
+              const statusColor = status === 'Nuevo' ? 'hsl(120,70%,60%)' : status === 'Eliminado' ? 'hsl(0,70%,60%)' : status === 'Modificado' ? 'hsl(40,90%,60%)' : 'hsl(var(--text-muted))';
+              return (
+                <div key={code} style={{ display: 'flex', padding: '6px 16px', borderBottom: '1px solid hsla(var(--border-color), 0.3)', fontSize: '0.72rem', background: status !== 'Sin cambios' ? `${statusColor}10` : 'transparent' }}>
+                  <div style={{ flex: '0 0 80px', fontWeight: 'bold', color: 'hsl(var(--primary-neon))' }}>{code}</div>
+                  <div style={{ flex: 1, color: 'hsl(var(--text-secondary))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(cur || nw)?.descripcion}</div>
+                  <div style={{ flex: '0 0 100px', textAlign: 'right', color: 'hsl(var(--text-muted))' }}>{cur ? cur.cantidad.toLocaleString('es-CO', { maximumFractionDigits: 2 }) : '—'}</div>
+                  <div style={{ flex: '0 0 100px', textAlign: 'right', color: 'hsl(var(--text-primary))' }}>{nw ? nw.cantidad.toLocaleString('es-CO', { maximumFractionDigits: 2 }) : '—'}</div>
+                  <div style={{ flex: '0 0 80px', textAlign: 'center', fontWeight: 'bold', color: statusColor, fontSize: '0.65rem' }}>{status}</div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+
       <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden', padding: 0 }}>
         {viewMode === 'folder' ? (
           <div style={{ flex: 1, overflow: 'auto' }}>
@@ -740,9 +1060,21 @@ export default function BudgetView() {
               {effectiveVersions.map(v => (
                 <div
                   key={v.id}
-                  className={`folder-card ${v.id === project?.activeBudgetVersionId ? 'active' : ''}`}
+                  className={`folder-card ${v.id === project?.activeBudgetVersionId || (v.id === '__legacy__' && !project?.activeBudgetVersionId) ? 'active' : ''}`}
+                  onClick={() => {
+                    if (v.id !== '__legacy__' && v.id !== project?.activeBudgetVersionId) {
+                      switchActiveVersion(project!.id, v.id);
+                      // Auto-save physical project
+                      setTimeout(() => {
+                        const updatedProject = getActiveProject();
+                        if (updatedProject && (window as any).electronAPI?.saveProject) {
+                          (window as any).electronAPI.saveProject(updatedProject).catch(console.error);
+                        }
+                      }, 100);
+                    }
+                  }}
                   onDoubleClick={() => {
-                    if (v.id !== '__legacy__') {
+                    if (v.id !== '__legacy__' && v.id !== project?.activeBudgetVersionId) {
                       switchActiveVersion(project!.id, v.id);
                     }
                     setViewMode('table');
@@ -784,8 +1116,64 @@ export default function BudgetView() {
                   <Folder className="folder-icon" size={48} fill="currentColor" fillOpacity={0.1} />
                   <div className="folder-name">{v.name}</div>
                   <div className="folder-date">{new Date(v.createdAt).toLocaleDateString()}</div>
-                  {v.id === project?.activeBudgetVersionId && (
-                    <div style={{ marginTop: '8px', fontSize: '0.6rem', color: 'hsl(var(--primary-neon))', fontWeight: 'bold' }}>ACTIVO</div>
+                  {v.id === project?.activeBudgetVersionId || (v.id === '__legacy__' && !project?.activeBudgetVersionId) ? (
+                    <div style={{
+                      marginTop: '12px',
+                      fontSize: '0.65rem',
+                      color: '#000',
+                      background: 'hsl(var(--primary-neon))',
+                      padding: '4px 10px',
+                      borderRadius: '12px',
+                      fontWeight: '800',
+                      letterSpacing: '0.05em',
+                      textTransform: 'uppercase',
+                      boxShadow: '0 0 12px hsl(var(--primary-neon) / 0.4)'
+                    }}>
+                      ACTIVO
+                    </div>
+                  ) : (
+                    v.id !== '__legacy__' && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          switchActiveVersion(project!.id, v.id);
+                          setTimeout(() => {
+                            const updatedProject = getActiveProject();
+                            if (updatedProject && (window as any).electronAPI?.saveProject) {
+                              (window as any).electronAPI.saveProject(updatedProject).catch(console.error);
+                            }
+                          }, 100);
+                        }}
+                        style={{
+                          marginTop: '12px',
+                          fontSize: '0.65rem',
+                          color: 'hsl(var(--text-secondary))',
+                          background: 'hsla(var(--bg-tertiary), 0.6)',
+                          border: '1px solid hsl(var(--border-color))',
+                          padding: '4px 10px',
+                          borderRadius: '12px',
+                          fontWeight: '800',
+                          letterSpacing: '0.05em',
+                          textTransform: 'uppercase',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s ease',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.borderColor = 'hsl(var(--primary-neon))';
+                          e.currentTarget.style.color = 'hsl(var(--primary-neon))';
+                          e.currentTarget.style.background = 'hsla(var(--primary-neon), 0.1)';
+                          e.currentTarget.style.boxShadow = '0 0 8px hsla(var(--primary-neon), 0.3)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.borderColor = 'hsl(var(--border-color))';
+                          e.currentTarget.style.color = 'hsl(var(--text-secondary))';
+                          e.currentTarget.style.background = 'hsla(var(--bg-tertiary), 0.6)';
+                          e.currentTarget.style.boxShadow = 'none';
+                        }}
+                      >
+                        Activar
+                      </button>
+                    )
                   )}
                 </div>
               ))}
@@ -1094,6 +1482,102 @@ export default function BudgetView() {
           }}
           onCancel={() => { setShowNameModal(false); setTargetVersionId(null); }}
         />
+
+        {/* Modal dual para crear nuevo presupuesto */}
+        {showCreateModal && (
+          <div style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            background: 'rgba(0,0,0,0.85)', zIndex: 10001,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            backdropFilter: 'blur(8px)'
+          }}>
+            <div style={{
+              background: 'linear-gradient(160deg, #0d1526 0%, #0f172a 100%)',
+              border: '1px solid #1e293b',
+              padding: '32px', borderRadius: '16px', width: '480px',
+              boxShadow: '0 30px 80px rgba(0,0,0,0.6)'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                <h3 style={{ margin: 0, color: '#fff', fontSize: '1.1rem', fontWeight: 'bold' }}>Nuevo Presupuesto</h3>
+                <button onClick={() => setShowCreateModal(false)} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', padding: '4px' }}>
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div style={{ marginBottom: '24px' }}>
+                <label style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: '8px' }}>Nombre del escenario</label>
+                <input
+                  type="text"
+                  value={createModalName}
+                  onChange={e => setCreateModalName(e.target.value)}
+                  placeholder="Ej: Presupuesto Modificado V1..."
+                  style={{
+                    width: '100%', padding: '10px 14px', background: '#1e293b',
+                    border: '1px solid #334155', borderRadius: '8px', color: '#fff',
+                    outline: 'none', fontSize: '0.9rem', boxSizing: 'border-box'
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                {/* Opción 1: Duplicar */}
+                <button
+                  onClick={() => {
+                    if (!project || !createModalName.trim()) return;
+                    createBudgetVersion(project.id, createModalName.trim());
+                    setShowCreateModal(false);
+                  }}
+                  style={{
+                    background: createModalMethod === 'duplicate' ? 'hsla(220, 80%, 50%, 0.2)' : 'hsla(220, 60%, 20%, 0.3)',
+                    border: '1px solid hsl(220, 60%, 40%)',
+                    borderRadius: '12px', padding: '20px 16px',
+                    cursor: 'pointer', textAlign: 'center', color: '#fff',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'hsl(220, 80%, 60%)'; (e.currentTarget as HTMLButtonElement).style.background = 'hsla(220, 80%, 50%, 0.2)'; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'hsl(220, 60%, 40%)'; (e.currentTarget as HTMLButtonElement).style.background = 'hsla(220, 60%, 20%, 0.3)'; }}
+                >
+                  <Copy size={28} color="hsl(220, 80%, 70%)" style={{ marginBottom: '10px' }} />
+                  <div style={{ fontWeight: 'bold', fontSize: '0.9rem', marginBottom: '6px' }}>Duplicar Actual</div>
+                  <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.5)', lineHeight: 1.4 }}>Copia el presupuesto activo con todos sus ítems y programación</div>
+                </button>
+
+                {/* Opción 2: Importar Excel */}
+                <button
+                  onClick={() => {
+                    if (!createModalName.trim()) return;
+                    excelImportRef.current?.click();
+                  }}
+                  style={{
+                    background: 'hsla(160, 60%, 20%, 0.3)',
+                    border: '1px solid hsl(160, 60%, 40%)',
+                    borderRadius: '12px', padding: '20px 16px',
+                    cursor: 'pointer', textAlign: 'center', color: '#fff',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'hsl(160, 80%, 60%)'; (e.currentTarget as HTMLButtonElement).style.background = 'hsla(160, 80%, 50%, 0.2)'; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'hsl(160, 60%, 40%)'; (e.currentTarget as HTMLButtonElement).style.background = 'hsla(160, 60%, 20%, 0.3)'; }}
+                >
+                  <Upload size={28} color="hsl(160, 80%, 70%)" style={{ marginBottom: '10px' }} />
+                  <div style={{ fontWeight: 'bold', fontSize: '0.9rem', marginBottom: '6px' }}>Importar Excel</div>
+                  <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.5)', lineHeight: 1.4 }}>Sube un .xlsx con el nuevo presupuesto (preserva fechas de ítems existentes)</div>
+                </button>
+              </div>
+
+              <input
+                ref={excelImportRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                style={{ display: 'none' }}
+                onChange={handleCreateModalExcelChange}
+              />
+
+              <div style={{ marginTop: '20px', textAlign: 'center' }}>
+                <button onClick={() => setShowCreateModal(false)} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.5)', padding: '8px 20px', borderRadius: '8px', cursor: 'pointer', fontSize: '0.8rem' }}>Cancelar</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

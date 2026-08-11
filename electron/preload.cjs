@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   readFile: (filePath) => ipcRenderer.invoke('read-file', filePath),
   writeFile: (filePath, content) => ipcRenderer.invoke('write-file', filePath, content),
+  readSkillFile: (projectId, skillName) => ipcRenderer.invoke('read-skill-file', projectId, skillName),
+  saveSkillFile: (projectId, skillName, content) => ipcRenderer.invoke('save-skill-file', projectId, skillName, content),
   // Diálogos nativos para archivos .lch (reemplazan showOpenFilePicker en Electron)
   openLchDialog: () => ipcRenderer.invoke('open-lch-dialog'),
   saveLchDialog: (suggestedName, content) => ipcRenderer.invoke('save-lch-dialog', suggestedName, content),
@@ -19,6 +21,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteApuFile: (projectId, fileName) => ipcRenderer.invoke('delete-apu-file', projectId, fileName),
   startSyncServer: () => ipcRenderer.invoke('start-sync-server'),
   stopSyncServer: () => ipcRenderer.invoke('stop-sync-server'),
+  fetchGmailEmails: (credentials) => ipcRenderer.invoke('fetch-gmail-emails', credentials),
   onWifiSyncStart: (callback) => ipcRenderer.on('wifi-sync-start', (event, data) => callback(data)),
   onWifiSyncPhoto: (callback) => ipcRenderer.on('wifi-sync-photo', (event, data) => callback(data)),
   onWifiSyncEnd: (callback) => ipcRenderer.on('wifi-sync-end', (event) => callback())

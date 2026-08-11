@@ -13,11 +13,19 @@ const LocalImage = ({ photo, getPhotoLocalUrl, className, style, onLoad }: any) 
     let active = true;
     if (photo.isLocal) {
       getPhotoLocalUrl(photo.id).then((blobUrl: string | null) => {
-        if (active && blobUrl) setUrl(blobUrl);
+        if (active) {
+          if (blobUrl) {
+            setUrl(blobUrl);
+          } else if (photo.imageUrl) {
+            setUrl(photo.imageUrl);
+          }
+        }
       });
+    } else {
+      setUrl(photo.imageUrl || null);
     }
     return () => { active = false; };
-  }, [photo.id, photo.isLocal, getPhotoLocalUrl]);
+  }, [photo.id, photo.isLocal, getPhotoLocalUrl, photo.imageUrl]);
 
   return url ? <img src={url} alt={photo.description} className={className} style={style} onLoad={onLoad} loading="lazy" /> : null;
 };

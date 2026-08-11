@@ -561,24 +561,23 @@ export default function ScheduleView() {
               setGanttHoveredDayIndex(null);
             }}
           >
-            {/* Línea vertical de cursor — sin etiqueta flotante */}
-            {ganttCursorX !== null && (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: `${ganttCursorX}px`,
-                  width: '1px',
-                  height: '100%',
-                  background: 'hsl(var(--primary-neon-hsl) / 0.45)',
-                  boxShadow: '0 0 6px hsl(var(--primary-neon-hsl) / 0.6)',
-                  pointerEvents: 'none',
-                  zIndex: 50,
-                }}
-              />
-            )}
-
             <div style={{ width: `${totalDays * DAY_WIDTH}px`, position: 'relative', minHeight: '100%' }}>
+              {/* Línea vertical de cursor — sin etiqueta flotante */}
+              {ganttCursorX !== null && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: `${ganttCursorX}px`,
+                    width: '1px',
+                    height: '100%',
+                    background: 'hsl(var(--primary-neon-hsl) / 0.45)',
+                    boxShadow: '0 0 6px hsl(var(--primary-neon-hsl) / 0.6)',
+                    pointerEvents: 'none',
+                    zIndex: 50,
+                  }}
+                />
+              )}
               {/* Grid Background */}
               <div style={{ position: 'absolute', top: 0, left: 0, bottom: 0, display: 'flex', zIndex: 0, pointerEvents: 'none' }}>
                 {Array.from({ length: totalDays }).map((_, i) => (

@@ -398,12 +398,6 @@ export const exportPhotosToZip = async (project: Project, options: ExportOptions
     const dayFolder = rootFolder.folder(photoDate);
     if (!dayFolder) continue;
 
-    dayCounters[photoDate] = (dayCounters[photoDate] || 0) + 1;
-    const photoNum = dayCounters[photoDate];
-
-    const cleanItemCode = (photo.itemCode || 'General').replace(/[^a-zA-Z0-9_\-]/g, '_');
-    const filename = `${photoDate}_Item_${cleanItemCode}_Foto_${photoNum}.jpg`;
-
     let base64Data: string | null = null;
 
     if (photo.isLocal) {
@@ -430,6 +424,23 @@ export const exportPhotosToZip = async (project: Project, options: ExportOptions
     }
 
     if (base64Data) {
+      dayCounters[photoDate] = (dayCounters[photoDate] || 0) + 1;
+      const photoNum = dayCounters[photoDate];
+
+      const cleanItemCode = (photo.itemCode || 'General').replace(/[^a-zA-Z0-9_\-]/g, '_');
+      
+      // Detectar extensión basada en el tipo MIME
+      let ext = 'jpg';
+      if (base64Data.startsWith('data:')) {
+        const mime = base64Data.split(';')[0].split(':')[1] || '';
+        if (mime.includes('png')) ext = 'png';
+        else if (mime.includes('webp')) ext = 'webp';
+        else if (mime.includes('gif')) ext = 'gif';
+      }
+
+      const filename = `${photoDate}_Item_${cleanItemCode}_Foto_${photoNum}.${ext}`;
+      const txtFilename = `${photoDate}_Item_${cleanItemCode}_Foto_${photoNum}.txt`;
+
       let pureBase64 = base64Data;
       if (base64Data.startsWith('data:')) {
         pureBase64 = base64Data.split(',')[1];
@@ -444,7 +455,7 @@ export const exportPhotosToZip = async (project: Project, options: ExportOptions
         `Descripción: ${photo.description || 'Sin descripción.'}`
       ].join('\n');
       
-      dayFolder.file(filename.replace(/\.jpg$/i, '.txt'), descText);
+      dayFolder.file(txtFilename, descText);
     }
 
     processed++;

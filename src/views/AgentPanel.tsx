@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Send, Bot, User, Trash2, Download, Mic, MicOff } from 'lucide-react';
+import { X, Send, Bot, User, Trash2, Download, Mic, MicOff, Paperclip, FileText } from 'lucide-react';
 import { useAgent } from '../context/AgentContext';
 import { useProjects } from '../context/ProjectsContext';
 import { exportAIReportToWord } from '../utils/aiReportExport';
 import { chatWithAgent, transcribeAudio, type ChatMessage, type MessageContent } from '../services/aiService';
+import { processUploadedFile, type ProcessedFile } from '../services/fileParserService';
 
 const AgentPanel: React.FC = () => {
   const { isAgentOpen, toggleAgent, messages, sendMessage, isLoading, clearHistory, taskProgress, rateLimitCountdown } = useAgent();
@@ -17,6 +18,42 @@ const AgentPanel: React.FC = () => {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recordingTimeoutRef = useRef<any>(null);
+
+  const [pendingFiles, setPendingFiles] = useState<ProcessedFile[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleAttachClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    
+    setIsUploading(true);
+    const newProcessedFiles: ProcessedFile[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      try {
+        const processed = await processUploadedFile(file);
+        newProcessedFiles.push(processed);
+      } catch (err) {
+        console.error("Error al procesar archivo:", file.name, err);
+        alert(`Error al procesar "${file.name}": ` + (err instanceof Error ? err.message : String(err)));
+      }
+    }
+    setPendingFiles(prev => [...prev, ...newProcessedFiles]);
+    setIsUploading(false);
+    
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const removePendingFile = (idx: number) => {
+    setPendingFiles(prev => prev.filter((_, i) => i !== idx));
+  };
 
   useEffect(() => {
     return () => {
@@ -128,9 +165,11 @@ const AgentPanel: React.FC = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (input.trim() && !isLoading) {
-      sendMessage(input.trim());
+    const hasAttachments = pendingFiles.length > 0;
+    if ((input.trim() || hasAttachments) && !isLoading) {
+      sendMessage(input.trim(), pendingFiles);
       setInput('');
+      setPendingFiles([]);
     }
   };
 
@@ -152,6 +191,36 @@ const AgentPanel: React.FC = () => {
       animation: 'slideLeft 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
       overflow: 'hidden'
     }}>
+      <style>{`
+        @keyframes agent-spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+        @keyframes agent-pulse {
+          0%, 100% { opacity: 0.5; }
+          50% { opacity: 1; }
+        }
+        .agent-loading-spinner {
+          width: 12px;
+          height: 12px;
+          border: 2px solid hsla(var(--primary-neon-hsl), 0.2);
+          border-top-color: hsl(var(--accent-primary));
+          border-radius: 50%;
+          animation: agent-spin 0.8s linear infinite;
+        }
+        .agent-loading-text {
+          animation: agent-pulse 1.5s ease-in-out infinite;
+          font-family: var(--font-technical);
+          font-size: 0.72rem;
+          letter-spacing: 0.5px;
+          text-transform: uppercase;
+          font-weight: bold;
+          color: hsl(var(--accent-primary));
+        }
+        .agent-spinning-icon {
+          animation: agent-spin 4s linear infinite;
+        }
+      `}</style>
       {/* Header */}
       <div style={{
         padding: '16px',
@@ -249,48 +318,123 @@ const AgentPanel: React.FC = () => {
               {msg.role === 'user' ? <User size={14} /> : <Bot size={14} />}
             </div>
             <div style={{
-              background: msg.role === 'user' ? 'hsla(var(--bg-tertiary), 0.8)' : 'transparent',
-              border: msg.role === 'user' ? '1px solid hsl(var(--border-color))' : 'none',
-              padding: msg.role === 'user' ? '10px 14px' : '4px 0',
-              borderRadius: 'var(--radius-md)',
-              borderTopRightRadius: msg.role === 'user' ? '0' : 'var(--radius-md)',
-              borderTopLeftRadius: msg.role === 'assistant' ? '0' : 'var(--radius-md)',
-              maxWidth: '85%',
-              color: 'hsl(var(--text-primary))',
-              fontSize: '0.85rem',
-              lineHeight: '1.5',
-              wordBreak: 'break-word',
-              whiteSpace: 'pre-wrap' // Para respetar saltos de línea y formateo markdown básico
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
+              maxWidth: '85%'
             }}>
-              {typeof msg.content === 'string' ? (
-                msg.content
-              ) : (
-                (msg.content as MessageContent[]).map((c, i) => c.type === 'text' ? c.text : null).join('')
-              )}
-              {msg.isReport && activeProject && (
-                <button
-                  onClick={() => exportAIReportToWord(activeProject, typeof msg.content === 'string' ? msg.content : '')}
-                  className="btn btn-secondary"
-                  style={{
-                    marginTop: '12px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    fontSize: '0.75rem',
-                    padding: '6px 12px',
-                    background: 'hsla(var(--accent-primary), 0.1)',
-                    color: 'hsl(var(--accent-primary))',
-                    border: '1px solid hsla(var(--accent-primary), 0.3)',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    width: '100%',
-                    justifyContent: 'center'
-                  }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = 'hsla(var(--accent-primary), 0.2)'; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = 'hsla(var(--accent-primary), 0.1)'; }}
-                >
-                  <Download size={14} /> DESCARGAR REPORTE WORD
-                </button>
+              <div style={{
+                background: msg.role === 'user' ? 'hsla(var(--bg-tertiary), 0.8)' : 'transparent',
+                border: msg.role === 'user' ? '1px solid hsl(var(--border-color))' : 'none',
+                padding: msg.role === 'user' ? '10px 14px' : '4px 0',
+                borderRadius: 'var(--radius-md)',
+                borderTopRightRadius: msg.role === 'user' ? '0' : 'var(--radius-md)',
+                borderTopLeftRadius: msg.role === 'assistant' ? '0' : 'var(--radius-md)',
+                color: 'hsl(var(--text-primary))',
+                fontSize: '0.85rem',
+                lineHeight: '1.5',
+                wordBreak: 'break-word',
+                whiteSpace: 'pre-wrap', // Para respetar saltos de línea y formateo markdown básico
+                width: '100%'
+              }}>
+                {typeof msg.content === 'string' ? (
+                  msg.content
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {/* Text parts */}
+                    {(msg.content as MessageContent[])
+                      .filter(c => c.type === 'text')
+                      .map((c, i) => (
+                        <span key={i}>{c.text}</span>
+                      ))}
+                    
+                    {/* Image parts */}
+                    {(msg.content as MessageContent[])
+                      .filter(c => c.type === 'image_url')
+                      .map((c, i) => c.image_url?.url && (
+                        <img
+                          key={i}
+                          src={c.image_url.url}
+                          alt="Adjunto"
+                          style={{
+                            maxWidth: '100%',
+                            maxHeight: '150px',
+                            objectFit: 'contain',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid hsl(var(--border-color))',
+                            marginTop: '4px',
+                            cursor: 'pointer'
+                          }}
+                          onClick={() => window.open(c.image_url!.url, '_blank')}
+                        />
+                      ))}
+                    
+                    {/* File parts */}
+                    {(msg.content as MessageContent[])
+                      .filter(c => c.type === 'file')
+                      .map((c, i) => c.file && (
+                        <div
+                          key={i}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            background: 'hsla(var(--bg-primary), 0.5)',
+                            border: '1px solid hsl(var(--border-color))',
+                            borderRadius: 'var(--radius-sm)',
+                            padding: '6px 10px',
+                            fontSize: '0.75rem',
+                            marginTop: '4px',
+                            alignSelf: 'flex-start'
+                          }}
+                        >
+                          <FileText size={16} style={{ color: 'hsl(var(--accent-primary))', flexShrink: 0 }} />
+                          <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                            <span style={{ fontWeight: '500', color: 'hsl(var(--text-primary))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>{c.file.name}</span>
+                            <span style={{ fontSize: '0.65rem', color: 'hsl(var(--text-muted))' }}>{c.file.mimeType}</span>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                )}
+                {msg.isReport && activeProject && (
+                  <button
+                    onClick={() => exportAIReportToWord(activeProject, typeof msg.content === 'string' ? msg.content : '')}
+                    className="btn btn-secondary"
+                    style={{
+                      marginTop: '12px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontSize: '0.75rem',
+                      padding: '6px 12px',
+                      background: 'hsla(var(--accent-primary), 0.1)',
+                      color: 'hsl(var(--accent-primary))',
+                      border: '1px solid hsla(var(--accent-primary), 0.3)',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      width: '100%',
+                      justifyContent: 'center'
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = 'hsla(var(--accent-primary), 0.2)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'hsla(var(--accent-primary), 0.1)'; }}
+                  >
+                    <Download size={14} /> DESCARGAR REPORTE WORD
+                  </button>
+                )}
+              </div>
+              {msg.timestamp && (
+                <span style={{
+                  fontSize: '0.65rem',
+                  color: 'hsl(var(--text-muted))',
+                  marginTop: '4px',
+                  marginRight: msg.role === 'user' ? '4px' : '0',
+                  marginLeft: msg.role === 'assistant' ? '4px' : '0',
+                  fontFamily: 'var(--font-technical)',
+                  opacity: 0.8
+                }}>
+                  {msg.timestamp}
+                </span>
               )}
             </div>
           </div>
@@ -302,10 +446,11 @@ const AgentPanel: React.FC = () => {
               background: 'hsla(var(--accent-primary), 0.1)', border: '1px solid hsla(var(--accent-primary), 0.5)',
               display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'hsl(var(--accent-primary))'
             }}>
-              <Bot size={14} />
+              <Bot size={14} className="agent-spinning-icon" />
             </div>
-            <div style={{ padding: '8px 0', fontSize: '0.85rem', color: 'hsl(var(--text-muted))', display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <span className="dot-pulse">Generando respuesta...</span>
+            <div style={{ padding: '8px 0', fontSize: '0.85rem', color: 'hsl(var(--text-muted))', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div className="agent-loading-spinner" />
+              <span className="agent-loading-text">Pensando...</span>
             </div>
           </div>
         )}
@@ -381,7 +526,118 @@ const AgentPanel: React.FC = () => {
             </div>
           </div>
         )}
+        {/* Visualización de archivos pendientes */}
+        {pendingFiles.length > 0 && (
+          <div style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '8px',
+            marginBottom: '10px',
+            padding: '4px 0',
+            maxHeight: '120px',
+            overflowY: 'auto'
+          }} className="custom-scrollbar">
+            {pendingFiles.map((file, idx) => (
+              <div
+                key={idx}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  background: 'hsla(var(--bg-primary), 0.6)',
+                  border: '1px solid hsl(var(--border-color))',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '4px 8px',
+                  fontSize: '0.75rem',
+                  color: 'hsl(var(--text-primary))',
+                  maxWidth: '180px',
+                  position: 'relative'
+                }}
+              >
+                {file.mimeType.startsWith('image/') && file.url ? (
+                  <img
+                    src={file.url}
+                    alt={file.name}
+                    style={{
+                      width: '20px',
+                      height: '20px',
+                      objectFit: 'cover',
+                      borderRadius: '2px'
+                    }}
+                  />
+                ) : (
+                  <FileText size={14} style={{ color: 'hsl(var(--accent-primary))', flexShrink: 0 }} />
+                )}
+                <span
+                  style={{
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    flex: 1
+                  }}
+                  title={file.name}
+                >
+                  {file.name}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => removePendingFile(idx)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'hsl(var(--text-muted))',
+                    cursor: 'pointer',
+                    padding: '2px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: '50%',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.color = 'hsl(var(--danger))'}
+                  onMouseLeave={(e) => e.currentTarget.style.color = 'hsl(var(--text-muted))'}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <form onSubmit={handleSubmit} style={{ display: 'flex', gap: '8px' }}>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            onChange={handleFileChange}
+            style={{ display: 'none' }}
+          />
+          <button
+            type="button"
+            onClick={handleAttachClick}
+            disabled={isLoading || rateLimitCountdown > 0 || isTranscribing || isUploading}
+            style={{
+              background: 'hsla(var(--bg-tertiary), 1)',
+              color: 'hsl(var(--text-secondary))',
+              border: '1px solid hsl(var(--border-color))',
+              borderRadius: 'var(--radius-md)',
+              padding: '0 12px',
+              cursor: (isLoading || rateLimitCountdown > 0 || isTranscribing || isUploading) ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'all 0.2s',
+              opacity: (isLoading || rateLimitCountdown > 0 || isTranscribing || isUploading) ? 0.5 : 1
+            }}
+            title="Adjuntar archivos"
+          >
+            {isUploading ? (
+              <span className="dot-pulse" style={{ fontSize: '0.65rem' }}>...</span>
+            ) : (
+              <Paperclip size={16} />
+            )}
+          </button>
+          
           <input
             ref={inputRef}
             type="text"
@@ -394,9 +650,11 @@ const AgentPanel: React.FC = () => {
                   ? "Transcribiendo voz con IA..." 
                   : isListening 
                     ? "Escuchando... habla ahora y presiona el micro al terminar." 
-                    : "Pregúntale al Agente IA..."
+                    : isUploading
+                      ? "Procesando archivo adjunto..."
+                      : "Pregúntale al Agente IA..."
             }
-            disabled={isLoading || rateLimitCountdown > 0 || isTranscribing}
+            disabled={isLoading || rateLimitCountdown > 0 || isTranscribing || isUploading}
             style={{
               flex: 1,
               background: 'hsl(var(--bg-primary))',
@@ -411,23 +669,24 @@ const AgentPanel: React.FC = () => {
             onFocus={(e) => e.target.style.borderColor = 'hsl(var(--accent-primary))'}
             onBlur={(e) => e.target.style.borderColor = 'hsl(var(--border-color))'}
           />
+          
           <button
             type="button"
             onClick={isListening ? stopRecording : startRecording}
-            disabled={isLoading || rateLimitCountdown > 0 || isTranscribing}
+            disabled={isLoading || rateLimitCountdown > 0 || isTranscribing || isUploading}
             style={{
               background: isListening ? 'hsl(var(--danger))' : 'hsla(var(--bg-tertiary), 1)',
               color: isListening ? '#fff' : 'hsl(var(--text-secondary))',
               border: isListening ? 'none' : '1px solid hsl(var(--border-color))',
               borderRadius: 'var(--radius-md)',
               padding: '0 12px',
-              cursor: (isLoading || rateLimitCountdown > 0 || isTranscribing) ? 'not-allowed' : 'pointer',
+              cursor: (isLoading || rateLimitCountdown > 0 || isTranscribing || isUploading) ? 'not-allowed' : 'pointer',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               transition: 'all 0.2s',
               boxShadow: isListening ? '0 0 10px hsla(var(--danger-hsl), 0.4)' : 'none',
-              opacity: (isLoading || rateLimitCountdown > 0 || isTranscribing) ? 0.5 : 1
+              opacity: (isLoading || rateLimitCountdown > 0 || isTranscribing || isUploading) ? 0.5 : 1
             }}
             title={
               isTranscribing 
@@ -445,23 +704,29 @@ const AgentPanel: React.FC = () => {
               <Mic size={16} />
             )}
           </button>
+          
           <button
             type="submit"
-            disabled={!input.trim() || isLoading || rateLimitCountdown > 0 || isTranscribing}
+            disabled={(!input.trim() && pendingFiles.length === 0) || isLoading || rateLimitCountdown > 0 || isTranscribing || isUploading}
             style={{
-              background: input.trim() && !isLoading && rateLimitCountdown === 0 && !isTranscribing ? 'hsl(var(--accent-primary))' : 'hsla(var(--bg-tertiary), 1)',
-              color: input.trim() && !isLoading && rateLimitCountdown === 0 && !isTranscribing ? '#000' : 'hsl(var(--text-muted))',
+              background: (input.trim() || pendingFiles.length > 0) && !isLoading && rateLimitCountdown === 0 && !isTranscribing && !isUploading ? 'hsl(var(--accent-primary))' : 'hsla(var(--bg-tertiary), 1)',
+              color: (input.trim() || pendingFiles.length > 0) && !isLoading && rateLimitCountdown === 0 && !isTranscribing && !isUploading ? '#000' : 'hsl(var(--text-muted))',
               border: 'none',
               borderRadius: 'var(--radius-md)',
               padding: '0 16px',
-              cursor: input.trim() && !isLoading && rateLimitCountdown === 0 && !isTranscribing ? 'pointer' : 'not-allowed',
+              cursor: (input.trim() || pendingFiles.length > 0) && !isLoading && rateLimitCountdown === 0 && !isTranscribing && !isUploading ? 'pointer' : 'not-allowed',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              transition: 'all 0.2s'
+              transition: 'all 0.2s',
+              minWidth: '48px'
             }}
           >
-            <Send size={16} />
+            {isLoading ? (
+              <div className="agent-loading-spinner" style={{ borderTopColor: 'currentColor' }} />
+            ) : (
+              <Send size={16} />
+            )}
           </button>
         </form>
       </div>

@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
 import type { ReactNode } from 'react';
-import type { BudgetItem, ProgressReport, LogiEntry, Project, PartialReport, PhotoReport } from '../types/projectTypes';
+import type { Project, BudgetItem, ProgressReport, PartialReport, LogiEntry, PhotoReport, ReportFormat, ReportStaff, BudgetVersion, ExecutiveReport } from '../types/projectTypes';
 import { photoDB } from '../services/PhotoDatabase';
 import JSZip from 'jszip';
 
@@ -21,8 +21,9 @@ interface ProjectsContextType {
   removeBudgetItem: (projectId: string, itemIndex: number) => void;
   importMsProjectXml: (projectId: string, xmlText: string) => void;
   importBudgetExcel: (projectId: string, items: BudgetItem[], totalBase: number) => void;
-  addProgressReport: (projectId: string, date: string, name: string) => void;
+  addProgressReport: (projectId: string, date: string, name: string, reportId?: string) => void;
   updateProgressEntry: (projectId: string, reportId: string, itemCode: string, quantity: number) => void;
+  importProgressEntries: (projectId: string, reportId: string, entries: { itemCode: string; accumulatedQuantity: number }[]) => void;
   removeProgressReport: (projectId: string, reportId: string) => void;
   addPartialReport: (projectId: string, date: string, name: string) => void;
   updatePartialEntry: (projectId: string, reportId: string, itemCode: string, fields: { partialQuantity?: number, partialValue?: number, partialPercentage?: number }) => void;
@@ -64,8 +65,8 @@ interface ProjectsContextType {
   exportLocalPhotosBackup: (projectId: string) => Promise<void>;
   importLocalPhotosBackup: (projectId: string) => Promise<void>;
   getPhotoLocalUrl: (entryId: string) => Promise<string | null>;
-  currentView: 'dashboard' | 'budget' | 'schedule' | 'progress' | 'photos' | 'reports' | 'parciales' | 'analytics' | 'create-project' | 'edit-project' | 'photo-reports' | 'correspondence' | 'costs';
-  setCurrentView: (view: 'dashboard' | 'budget' | 'schedule' | 'progress' | 'photos' | 'reports' | 'parciales' | 'analytics' | 'create-project' | 'edit-project' | 'photo-reports' | 'correspondence' | 'costs') => void;
+  currentView: 'dashboard' | 'budget' | 'schedule' | 'progress' | 'photos' | 'reports' | 'parciales' | 'analytics' | 'create-project' | 'edit-project' | 'photo-reports' | 'correspondence' | 'costs' | 'monthly-reports';
+  setCurrentView: (view: 'dashboard' | 'budget' | 'schedule' | 'progress' | 'photos' | 'reports' | 'parciales' | 'analytics' | 'create-project' | 'edit-project' | 'photo-reports' | 'correspondence' | 'costs' | 'monthly-reports') => void;
   costsActiveTab: 'contract' | 'operation' | 'control';
   setCostsActiveTab: (tab: 'contract' | 'operation' | 'control') => void;
   selectedPhotoId: string | null;
@@ -75,6 +76,9 @@ interface ProjectsContextType {
   addPhotoReport: (projectId: string, report: Omit<PhotoReport, 'id' | 'createdAt'>) => void;
   removePhotoReport: (projectId: string, reportId: string) => void;
   updatePhotoReport: (projectId: string, reportId: string, updates: Partial<Omit<PhotoReport, 'id' | 'createdAt'>>) => void;
+  addExecutiveReport: (projectId: string, report: Omit<ExecutiveReport, 'id' | 'createdAt'>) => void;
+  removeExecutiveReport: (projectId: string, reportId: string) => void;
+  updateExecutiveReport: (projectId: string, reportId: string, updates: Partial<Omit<ExecutiveReport, 'id' | 'createdAt'>>) => void;
 }
 
 const ProjectsContext = createContext<ProjectsContextType | undefined>(undefined);
@@ -102,7 +106,7 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
     return localStorage.getItem('lch-control-active') || null;
   });
 
-  const [currentView, setCurrentView] = useState<'dashboard' | 'budget' | 'schedule' | 'progress' | 'photos' | 'reports' | 'parciales' | 'analytics' | 'create-project' | 'edit-project' | 'photo-reports' | 'correspondence' | 'costs'>('dashboard');
+  const [currentView, setCurrentView] = useState<'dashboard' | 'budget' | 'schedule' | 'progress' | 'photos' | 'reports' | 'parciales' | 'analytics' | 'create-project' | 'edit-project' | 'photo-reports' | 'correspondence' | 'costs' | 'monthly-reports'>('dashboard');
   const [costsActiveTab, setCostsActiveTab] = useState<'contract' | 'operation' | 'control'>('contract');
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
 
@@ -179,7 +183,7 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
         p_cap: 70,
         p_cont: 70,
         p_total: 70,
-        exec: 120
+        exec: 180
       },
       parciales: {
         item: 60,
@@ -360,7 +364,7 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
             date: newEntry.date || new Date().toISOString().split('T')[0],
             itemCode: String(newEntry.itemCode || "").trim(),
             description: String(newEntry.description || "").trim(),
-            imageUrl: "",
+            imageUrl: newEntry.imageUrl || "",
             isLocal: true,
             status: 'pending' as 'pending' | 'integrated'
           };
@@ -370,6 +374,7 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
             updatedEntries[existingIdx] = {
               ...localEntry,
               ...entryToUpsert,
+              imageUrl: entryToUpsert.imageUrl || localEntry.imageUrl || "",
               itemCode: (localEntry.itemCode && localEntry.itemCode.trim()) ? localEntry.itemCode : entryToUpsert.itemCode,
               description: (localEntry.description && localEntry.description.trim()) ? localEntry.description : entryToUpsert.description,
               status: localEntry.status === 'integrated' ? 'integrated' : entryToUpsert.status
@@ -500,6 +505,46 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
       return {
         ...p,
         photoReports: (p.photoReports || []).map(r =>
+          r.id === reportId ? { ...r, ...updates } : r
+        )
+      };
+    }));
+  };
+
+  const addExecutiveReport = (projectId: string, reportData: Omit<ExecutiveReport, 'id' | 'createdAt'>) => {
+    captureHistory();
+    const newReport: ExecutiveReport = {
+      ...reportData,
+      id: `rep-exec-${Date.now()}`,
+      createdAt: new Date().toISOString()
+    };
+    setProjects(prev => prev.map(p => {
+      if (String(p.id) !== String(projectId)) return p;
+      return {
+        ...p,
+        executiveReports: [...(p.executiveReports || []), newReport]
+      };
+    }));
+  };
+
+  const removeExecutiveReport = (projectId: string, reportId: string) => {
+    captureHistory();
+    setProjects(prev => prev.map(p => {
+      if (String(p.id) !== String(projectId)) return p;
+      return {
+        ...p,
+        executiveReports: (p.executiveReports || []).filter(r => r.id !== reportId)
+      };
+    }));
+  };
+
+  const updateExecutiveReport = (projectId: string, reportId: string, updates: Partial<Omit<ExecutiveReport, 'id' | 'createdAt'>>) => {
+    captureHistory();
+    setProjects(prev => prev.map(p => {
+      if (String(p.id) !== String(projectId)) return p;
+      return {
+        ...p,
+        executiveReports: (p.executiveReports || []).map(r =>
           r.id === reportId ? { ...r, ...updates } : r
         )
       };
@@ -844,12 +889,79 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
     setProjects(prev => prev.map(p => {
       if (p.id !== projectId) return p;
 
-      const newVersions = (p.budgetVersions || []).map(v => {
-        if (v.id !== p.activeBudgetVersionId) return v;
-        return { ...v, items: items };
+      const activeVersion = p.budgetVersions?.find(v => v.id === p.activeBudgetVersionId);
+      const oldItems = activeVersion ? activeVersion.items : p.budgetItems || [];
+
+      // Create a set of new item codes for fast lookup
+      const newItemCodes = new Set(items.map(i => String(i.item).trim()));
+
+      // 1. Process items from the new Excel sheet (merging dates if they exist)
+      const updatedItems = items.map(newItem => {
+        const matchingOldItem = oldItems.find(oldItem => String(oldItem.item).trim() === String(newItem.item).trim());
+        if (matchingOldItem) {
+          return {
+            ...newItem,
+            startDate: newItem.startDate || matchingOldItem.startDate,
+            endDate: newItem.endDate || matchingOldItem.endDate,
+          };
+        }
+        return newItem;
       });
 
-      return { ...p, budgetVersions: newVersions, budgetTotalBase: totalBase };
+      // 2. Find items in the old budget that are NOT in the new Excel sheet
+      const missingItems = oldItems.filter(oldItem => !newItemCodes.has(String(oldItem.item).trim()));
+
+      // 3. For missing items, set their quantity and total to 0, but keep them
+      const disabledItems = missingItems.map(oldItem => ({
+        ...oldItem,
+        cantidad: 0,
+        vlrTotal: 0
+      }));
+
+      // 4. Merge the lists
+      const mergedItems = [...updatedItems, ...disabledItems];
+
+      // 5. Sort them naturally using item codes (e.g. 1, 1.1, 1.2.5n, 1.2.10n, 2)
+      const compareItemCodes = (a: string, b: string) => {
+        const aParts = String(a).split('.');
+        const bParts = String(b).split('.');
+        for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
+          const aPart = aParts[i] || '';
+          const bPart = bParts[i] || '';
+          
+          const aNum = parseFloat(aPart);
+          const bNum = parseFloat(bPart);
+          
+          if (!isNaN(aNum) && !isNaN(bNum)) {
+            if (aNum !== bNum) return aNum - bNum;
+            const aStr = aPart.replace(String(aNum), '');
+            const bStr = bPart.replace(String(bNum), '');
+            if (aStr !== bStr) return aStr.localeCompare(bStr);
+          } else {
+            if (aPart !== bPart) return aPart.localeCompare(bPart);
+          }
+        }
+        return 0;
+      };
+
+      mergedItems.sort((a, b) => compareItemCodes(a.item, b.item));
+
+      // 6. Recalculate total budget base based on the merged items (only summing up items of type 'item')
+      const calculatedTotal = mergedItems.reduce((acc, curr) => 
+        curr.type === 'item' ? acc + (Number(curr.vlrTotal) || 0) : acc, 0
+      );
+
+      const newVersions = (p.budgetVersions || []).map(v => {
+        if (v.id !== p.activeBudgetVersionId) return v;
+        return { ...v, items: mergedItems };
+      });
+
+      return { 
+        ...p, 
+        budgetVersions: newVersions, 
+        budgetItems: p.activeBudgetVersionId === 'v-original' || !p.activeBudgetVersionId ? mergedItems : p.budgetItems,
+        budgetTotalBase: calculatedTotal 
+      };
     }));
   };
 
@@ -1231,19 +1343,23 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const addProgressReport = (projectId: string, date: string, name: string) => {
+  const addProgressReport = (projectId: string, date: string, name: string, reportId?: string) => {
     captureHistory();
     setProjects(prev => prev.map(p => {
       if (p.id !== projectId) return p;
+      
+      const activeVersion = p.budgetVersions?.find(v => v.id === p.activeBudgetVersionId);
+      const currentBudgetItems = activeVersion?.items || p.budgetItems || [];
+
       const lastReport = p.progressReports && p.progressReports.length > 0
         ? p.progressReports[p.progressReports.length - 1]
         : null;
 
       const newReport: ProgressReport = {
-        id: crypto.randomUUID(),
+        id: reportId || crypto.randomUUID(),
         date,
         name,
-        entries: p.budgetItems.filter(i => i.type === 'item').map(i => {
+        entries: currentBudgetItems.filter(i => i.type === 'item').map(i => {
           const prevEntry = lastReport?.entries.find(e => e.itemCode === i.item);
           return {
             itemCode: i.item,
@@ -1269,6 +1385,33 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
           newEntries.push({ itemCode, accumulatedQuantity: quantity });
         }
         return { ...r, entries: newEntries };
+      });
+      return { ...p, progressReports: newReports };
+    }));
+  };
+
+  const importProgressEntries = (projectId: string, reportId: string, newEntriesList: { itemCode: string; accumulatedQuantity: number }[]) => {
+    captureHistory();
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projectId) return p;
+      const newReports = (p.progressReports || []).map(r => {
+        if (r.id !== reportId) return r;
+        
+        const newQuantitiesMap = new Map(newEntriesList.map(e => [e.itemCode, e.accumulatedQuantity]));
+        
+        const updatedEntries = r.entries.map(entry => {
+          if (newQuantitiesMap.has(entry.itemCode)) {
+            return { ...entry, accumulatedQuantity: newQuantitiesMap.get(entry.itemCode)! };
+          }
+          return entry;
+        });
+        
+        const existingCodes = new Set(r.entries.map(e => e.itemCode));
+        const addedEntries = newEntriesList
+          .filter(e => !existingCodes.has(e.itemCode))
+          .map(e => ({ itemCode: e.itemCode, accumulatedQuantity: e.accumulatedQuantity }));
+          
+        return { ...r, entries: [...updatedEntries, ...addedEntries] };
       });
       return { ...p, progressReports: newReports };
     }));
@@ -1417,6 +1560,7 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
     if (!project) return;
 
     try {
+      const migratedIds = new Set<string>();
       // 1. Download all photos from Supabase and store them in IndexedDB
       for (const entry of project.logiEntries || []) {
         if (!entry.isLocal && entry.imageUrl) {
@@ -1433,20 +1577,23 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
             const base64Data = await base64Promise;
             
             await photoDB.savePhoto(entry.id, projectId, base64Data);
+            migratedIds.add(entry.id);
           } catch (e) {
             console.error(`Error migrando foto ${entry.id}:`, e);
             // Si falla una, continuamos con el resto
           }
+        } else if (entry.isLocal) {
+          migratedIds.add(entry.id);
         }
       }
 
-      // 2. Actualizar el estado para marcar todas como isLocal: true
+      // 2. Actualizar el estado para marcar solo las migradas exitosamente como isLocal: true
       captureHistory();
       setProjects(prev => prev.map(p => {
         if (String(p.id) !== String(projectId)) return p;
         const newEntries = (p.logiEntries || []).map(e => ({
           ...e,
-          isLocal: true
+          isLocal: migratedIds.has(e.id) ? true : e.isLocal
         }));
         return { ...p, logiEntries: newEntries };
       }));
@@ -1465,45 +1612,109 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
     if (!project) return;
 
     try {
-      const photos = await photoDB.getPhotosByProject(projectId);
-      const backupData = {
-        version: 1,
-        projectId,
-        projectName: project.name,
-        photos: photos
-      };
-      const dataStr = JSON.stringify(backupData);
+      const includePhotos = confirm(
+        "¿Desea incluir las fotos locales (imágenes) en la copia de seguridad?\n\n" +
+        "• presione Aceptar para incluir imágenes (se creará un archivo comprimido .lchp seguro).\n" +
+        "• presione Cancelar para exportar solo la base de datos de textos y clasificaciones (ligero, rápido y seguro)."
+      );
+
+      let photos: any[] = [];
+      let zipBlob: Blob | null = null;
+      let dataStr = '';
+      let isZipFile = false;
+
+      if (includePhotos) {
+        photos = await photoDB.getPhotosByProject(projectId);
+        
+        // Crear un archivo ZIP para evitar RangeError: Invalid string length
+        const zip = new JSZip();
+        
+        // backup.json no contiene el base64 pesado de fotos, solo las clasificaciones y metadatos
+        const backupData = {
+          version: 1,
+          projectId,
+          projectName: project.name,
+          entries: project.logiEntries || [],
+          items: project.logiEntries || []
+        };
+        
+        zip.file("backup.json", JSON.stringify(backupData));
+        
+        // Agregar cada foto como binario al ZIP
+        for (const photo of photos) {
+          if (photo.id && photo.base64Data) {
+            const parts = photo.base64Data.split(',');
+            const base64DataOnly = parts.length > 1 ? parts[1] : parts[0];
+            
+            let ext = 'jpg';
+            if (parts[0].includes('image/png')) ext = 'png';
+            else if (parts[0].includes('image/webp')) ext = 'webp';
+            else if (parts[0].includes('image/gif')) ext = 'gif';
+            
+            zip.file(`photos/${photo.id}.${ext}`, base64DataOnly, { base64: true });
+          }
+        }
+        
+        zipBlob = await zip.generateAsync({ type: "blob" });
+        isZipFile = true;
+      } else {
+        const backupData = {
+          version: 1,
+          projectId,
+          projectName: project.name,
+          entries: project.logiEntries || [],
+          items: project.logiEntries || [],
+          photos: []
+        };
+        dataStr = JSON.stringify(backupData);
+      }
 
       const isElectron = !!(window as any).electronAPI;
+      let savedUsingPicker = false;
+
       if ('showSaveFilePicker' in window && !isElectron) {
-        const safeName = project.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-        const handle = await (window as any).showSaveFilePicker({
-          suggestedName: `${safeName}_Fotos.lchp`,
-          types: [{
-            description: 'LCH Photos Backup',
-            accept: { 'application/json': ['.lchp'] },
-          }],
-        });
+        try {
+          const safeName = project.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+          const handle = await (window as any).showSaveFilePicker({
+            suggestedName: `${safeName}_Fotos.lchp`,
+            types: [{
+              description: 'LCH Photos Backup',
+              accept: { 'application/octet-stream': ['.lchp'] },
+            }],
+          });
 
-        const writable = await handle.createWritable();
-        await writable.write(dataStr);
-        await writable.close();
+          const writable = await handle.createWritable();
+          if (isZipFile && zipBlob) {
+            await writable.write(zipBlob);
+          } else {
+            await writable.write(dataStr);
+          }
+          await writable.close();
+          savedUsingPicker = true;
 
-        const flash = document.createElement('div');
-        flash.innerText = "✓ Backup de Fotos (.lchp) Guardado";
-        flash.style.position = 'fixed';
-        flash.style.bottom = '70px';
-        flash.style.right = '20px';
-        flash.style.background = 'hsl(var(--accent-primary))';
-        flash.style.color = '#000';
-        flash.style.padding = '10px 20px';
-        flash.style.borderRadius = '8px';
-        flash.style.fontWeight = 'bold';
-        flash.style.zIndex = '9999';
-        document.body.appendChild(flash);
-        setTimeout(() => flash.remove(), 2500);
-      } else {
-        const blob = new Blob([dataStr], { type: 'application/json' });
+          const flash = document.createElement('div');
+          flash.innerText = "✓ Backup de Fotos (.lchp) Guardado";
+          flash.style.position = 'fixed';
+          flash.style.bottom = '70px';
+          flash.style.right = '20px';
+          flash.style.background = 'hsl(var(--accent-primary))';
+          flash.style.color = '#000';
+          flash.style.padding = '10px 20px';
+          flash.style.borderRadius = '8px';
+          flash.style.fontWeight = 'bold';
+          flash.style.zIndex = '9999';
+          document.body.appendChild(flash);
+          setTimeout(() => flash.remove(), 2500);
+        } catch (pickerErr: any) {
+          if (pickerErr.name === 'AbortError') {
+            return;
+          }
+          console.warn("showSaveFilePicker failed, falling back to traditional download method", pickerErr);
+        }
+      }
+
+      if (!savedUsingPicker) {
+        const blob = isZipFile && zipBlob ? zipBlob : new Blob([dataStr], { type: isZipFile ? 'application/zip' : 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -1515,7 +1726,7 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
     } catch (error: any) {
       if (error.name !== 'AbortError') {
         console.error("Error al exportar fotos", error);
-        alert("Ocurrió un error al intentar guardar el backup de fotos.");
+        alert("Ocurrió un error al intentar guardar el backup de fotos:\n" + (error.message || String(error)));
       }
     }
   };
@@ -1557,9 +1768,18 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
 
       for (const file of files) {
         let backupData: any = null;
-        const isZip = file.name.endsWith('.zip') || file.type === 'application/zip' || file.type === 'application/x-zip-compressed';
+        
+        // Detectar si el archivo es un ZIP leyendo los primeros 4 bytes mágicos (50 4B 03 04 -> PK\x03\x04)
+        const headerBuffer = await file.slice(0, 4).arrayBuffer();
+        const headerArr = new Uint8Array(headerBuffer);
+        const isZip = (headerArr[0] === 0x50 && headerArr[1] === 0x4B && headerArr[2] === 0x03 && headerArr[3] === 0x04) ||
+                      file.name.endsWith('.zip') || 
+                      file.type === 'application/zip' || 
+                      file.type === 'application/x-zip-compressed';
+                      
         let imported = 0;
         const localPhotosArray: { id: string; base64Data: string }[] = [];
+        let backupPhotos: any[] = [];
 
         if (isZip) {
           const zip = await JSZip.loadAsync(file);
@@ -1628,11 +1848,12 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
           const content = await file.text();
           backupData = JSON.parse(content);
 
-          if (!backupData.photos || !Array.isArray(backupData.photos)) {
-            throw new Error(`Formato de archivo .lchp inválido en ${file.name}`);
+          backupPhotos = backupData.photos || [];
+          if (!backupData.entries && !backupData.items && !Array.isArray(backupData.photos)) {
+            throw new Error(`Formato de archivo .lchp o .json inválido en ${file.name}`);
           }
 
-          for (const photo of backupData.photos) {
+          for (const photo of backupPhotos) {
             if (photo.id && photo.base64Data) {
               await photoDB.savePhoto(photo.id, projectId, photo.base64Data);
               localPhotosArray.push({ id: photo.id, base64Data: photo.base64Data });
@@ -1657,26 +1878,33 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
             const existingIdx = updatedEntries.findIndex(e => String(e.id) === String(newEntry.id));
             const hasLocalPhoto = isZip
               ? localPhotosArray.some((ph: any) => String(ph.id) === String(newEntry.id))
-              : backupData.photos?.some((ph: any) => String(ph.id) === String(newEntry.id));
+              : backupPhotos.some((ph: any) => String(ph.id) === String(newEntry.id));
             
             const entryToUpsert = {
               id: String(newEntry.id),
               date: newEntry.date || newEntry.fecha || new Date().toISOString().split('T')[0],
               itemCode: String(newEntry.itemCode || "").trim(),
               description: String(newEntry.description || newEntry.descripcion || "").trim(),
-              imageUrl: "",
+              imageUrl: newEntry.imageUrl || "",
               isLocal: hasLocalPhoto ? true : !!newEntry.isLocal,
               status: (newEntry.status || (newEntry.done ? 'integrated' : 'pending')) as 'pending' | 'integrated'
             };
 
             if (existingIdx >= 0) {
               const localEntry = updatedEntries[existingIdx];
+              
+              // Priorizar datos clasificados del backup (no vacíos ni temporales)
+              const backupHasCode = entryToUpsert.itemCode && entryToUpsert.itemCode.trim() !== '' && entryToUpsert.itemCode !== 'S/N' && entryToUpsert.itemCode !== 'General';
+              const backupHasDesc = entryToUpsert.description && entryToUpsert.description.trim() !== '';
+              const isLocalTemp = !localEntry.itemCode || localEntry.itemCode.trim() === '' || localEntry.itemCode === 'S/N' || localEntry.itemCode === 'General';
+              
               updatedEntries[existingIdx] = {
                 ...localEntry,
                 ...entryToUpsert,
-                itemCode: (localEntry.itemCode && localEntry.itemCode.trim()) ? localEntry.itemCode : entryToUpsert.itemCode,
-                description: (localEntry.description && localEntry.description.trim()) ? localEntry.description : entryToUpsert.description,
-                status: localEntry.status === 'integrated' ? 'integrated' : entryToUpsert.status
+                imageUrl: entryToUpsert.imageUrl || localEntry.imageUrl || "",
+                itemCode: (backupHasCode || isLocalTemp) ? entryToUpsert.itemCode : localEntry.itemCode,
+                description: (backupHasDesc || isLocalTemp) ? entryToUpsert.description : localEntry.description,
+                status: entryToUpsert.status === 'integrated' ? 'integrated' : localEntry.status
               };
             } else {
               updatedEntries.push(entryToUpsert);
@@ -1723,6 +1951,7 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
       importBudgetExcel,
       addProgressReport,
       updateProgressEntry,
+      importProgressEntries,
       removeProgressReport,
       addPartialReport,
       updatePartialEntry,
@@ -1764,7 +1993,10 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
       updateLogiEntries,
       addPhotoReport,
       removePhotoReport,
-      updatePhotoReport
+      updatePhotoReport,
+      addExecutiveReport,
+      removeExecutiveReport,
+      updateExecutiveReport
     }}>
       {children}
     </ProjectsContext.Provider>

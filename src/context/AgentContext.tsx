@@ -2,12 +2,18 @@ import React, { createContext, useContext, useState } from 'react';
 import type { ReactNode } from 'react';
 import { chatWithAgent } from '../services/aiService';
 import type { ChatMessage, MessageContent } from '../services/aiService';
-import { EXPORT_REPORT_DATA_TOOL, ADD_TODO_TOOL, DELETE_TODO_TOOL, GENERATE_PHOTO_REPORT_TOOL, GENERATE_PROGRESS_REPORT_TOOL } from '../services/aiTaskEngine';
+import { 
+  EXPORT_REPORT_DATA_TOOL, ADD_TODO_TOOL, DELETE_TODO_TOOL, GENERATE_PHOTO_REPORT_TOOL, GENERATE_PROGRESS_REPORT_TOOL, CREATE_NEW_BUDGET_TOOL,
+  READ_BUDGET_TOOL, READ_PROGRESS_REPORTS_TOOL, READ_PARTIAL_REPORTS_TOOL, READ_APUS_TOOL, READ_COST_RESOURCES_TOOL, READ_COST_TRANSACTIONS_TOOL, READ_CORRESPONDENCE_TOOL, READ_TODOS_TOOL,
+  READ_RAW_BUDGET_CHUNK_TOOL, WRITE_BUDGET_DRAFT_CHUNK_TOOL, GENERATE_EXECUTIVE_REPORT_TOOL
+} from '../services/aiTaskEngine';
 import type { TaskProgress } from '../services/aiTaskEngine';
 import { AI_GLOSSARY, getPackageData, buildProjectSystemInstruction } from '../services/aiContextBuilder';
 import { useProjects } from './ProjectsContext';
 import type { Project, LogiEntry, AgentTodo } from '../types/projectTypes';
 import { exportPhotosToWord, exportPhotosToZip, getFilteredPhotos } from '../utils/photoReportExporter';
+import { LOCAL_DEFAULT_SKILLS } from '../services/defaultSkills';
+import { parseRobustNumber } from '../utils/mathUtils';
 
 export interface AgentAlert {
   id: string;
@@ -104,7 +110,7 @@ interface AgentContextProps {
   isAgentOpen: boolean;
   toggleAgent: () => void;
   messages: ChatMessage[];
-  sendMessage: (content: string) => Promise<void>;
+  sendMessage: (content: string, attachments?: any[]) => Promise<void>;
   isLoading: boolean;
   clearHistory: () => void;
   taskProgress: TaskProgress | null;
@@ -125,7 +131,7 @@ export const AgentProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [isLoading, setIsLoading] = useState(false);
   const [taskProgress, setTaskProgress] = useState<TaskProgress | null>(null);
   const [hasUnreadResponse, setHasUnreadResponse] = useState(false);
-  const { activeProjectId, projects, updateProject, getPhotoLocalUrl, addPhotoReport } = useProjects();
+  const { activeProjectId, projects, updateProject, getPhotoLocalUrl, addPhotoReport, createBudgetVersion, importBudgetExcel, addExecutiveReport } = useProjects();
   
   const [rateLimitCountdown, setRateLimitCountdown] = useState<number>(0);
   const sendingRef = React.useRef(false);
@@ -483,37 +489,107 @@ export const AgentProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     updateTodosFile(updatedTodos, activeProject.filePath);
   };
 
-  const sendMessage = async (content: string) => {
+  const sendMessage = async (content: string, attachments?: any[]) => {
     if (sendingRef.current || isLoading || rateLimitCountdown > 0) {
       console.warn("[Agent Memory] Mensaje cancelado: petición en curso o rate limit activo.");
       return;
     }
     sendingRef.current = true;
     
-    const userMsg: ChatMessage = { role: 'user', content };
-    setMessages(prev => [...prev, userMsg]);
+    // Process attachments to generate clean message content
+    let finalContent: string | MessageContent[] = content;
+    
+    if (attachments && attachments.length > 0) {
+      let appendedText = content;
+      const nonTextAttachments: any[] = [];
+      
+      attachments.forEach(file => {
+        if (file.isTextBased && file.extractedText) {
+          appendedText += `\n\n[Archivo Adjunto: ${file.name}]\n${file.extractedText}`;
+        } else {
+          nonTextAttachments.push(file);
+        }
+      });
+      
+      if (nonTextAttachments.length > 0) {
+        const contentArray: MessageContent[] = [{ type: 'text', text: appendedText }];
+        nonTextAttachments.forEach(file => {
+          if (file.url) {
+            if (file.mimeType.startsWith('image/')) {
+              contentArray.push({
+                type: 'image_url',
+                image_url: { url: file.url }
+              });
+            } else {
+              contentArray.push({
+                type: 'file',
+                file: { url: file.url, name: file.name, mimeType: file.mimeType }
+              });
+            }
+          }
+        });
+        finalContent = contentArray;
+      } else {
+        finalContent = appendedText;
+      }
+    }
+
+    const activeProject = projects.find(p => p.id === activeProjectId);
+
+    let isLargeBudget = false;
+    let linesCount = 0;
+
+    if (typeof finalContent === 'string' && finalContent.length > 5000 && activeProjectId && activeProject) {
+      const lines = finalContent.split('\n');
+      linesCount = lines.length;
+      const hasTabsOrPipes = lines.slice(0, 15).some(line => line.includes('\t') || line.includes('|') || line.includes(';'));
+      const hasNumbers = lines.slice(0, 15).some(line => /\d+/.test(line));
+      
+      if (hasTabsOrPipes && hasNumbers) {
+        console.log("[Agent Intercept] Presupuesto extenso detectado. Redirigiendo a buffer.");
+        isLargeBudget = true;
+        
+        // Guardar en budgetRawText y reiniciar borrador
+        updateProject(activeProjectId, {
+          budgetRawText: finalContent,
+          budgetDraft: { versionName: 'Presupuesto Modificado V1', items: [] }
+        });
+        
+        // Guardar físicamente si es posible
+        if ((window as any).electronAPI && typeof (window as any).electronAPI.saveProject === 'function') {
+          const updatedProj = {
+            ...activeProject,
+            budgetRawText: finalContent,
+            budgetDraft: { versionName: 'Presupuesto Modificado V1', items: [] }
+          };
+          (window as any).electronAPI.saveProject(updatedProj)
+            .catch((err: any) => console.error("Error al guardar físicamente tras intercepción:", err));
+        }
+
+        finalContent = `[SISTEMA: El usuario ha pegado un presupuesto extenso de ${linesCount} líneas. El texto completo se ha almacenado en el buffer 'budgetRawText' del proyecto. Debes procesarlo de forma secuencial utilizando la herramienta 'read_raw_budget_chunk' para leer bloques de 20-30 líneas, procesarlos/validarlos, e ir guardando los ítems interpretados en el borrador usando la herramienta 'write_budget_draft_chunk'. Haz un plan de pasos y empieza leyendo el primer chunk. Explica al usuario en tu respuesta inicial que has detectado un presupuesto extenso y que vas a procesarlo en bloques para garantizar la precisión numérica.]`;
+      }
+    }
+
+    const userMsgForChat: ChatMessage = isLargeBudget 
+      ? { role: 'user', content: `[Presupuesto de obra pegado por el usuario - ${linesCount} líneas]` }
+      : { role: 'user', content: finalContent };
+
+    const userMsgForAi: ChatMessage = isLargeBudget 
+      ? { role: 'user', content: finalContent }
+      : userMsgForChat;
+
+    setMessages(prev => [...prev, userMsgForChat]);
     setIsLoading(true);
 
     try {
-      const activeProject = projects.find(p => p.id === activeProjectId);
-      const normalizedContent = content.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
       // 1. Inyectar la instrucción de sistema rígida con el contexto completo .lch y directrices de LCH Ingeniería (Optimizada con caché)
       let systemPrompt = '';
       if (activeProject) {
         const projectStateStr = JSON.stringify({
           id: activeProject.id,
-          costTransactions: activeProject.costTransactions,
-          costResources: activeProject.costResources,
-          agentTodos: activeProject.agentTodos,
-          progressReports: activeProject.progressReports,
-          partialReports: activeProject.partialReports,
-          correspondenceFiles: activeProject.correspondenceFiles,
-          budgetItems: activeProject.budgetItems,
-          activityAPUs: activeProject.activityAPUs,
           agentCustomInstructions: activeProject.agentCustomInstructions,
-          activeBudgetVersionId: activeProject.activeBudgetVersionId,
-          budgetVersions: activeProject.budgetVersions
+          activeBudgetVersionId: activeProject.activeBudgetVersionId
         });
 
         if (activeProject.id === lastProjectIdRef.current && systemPromptRef.current && projectStateStr === lastProjectStateRef.current) {
@@ -526,6 +602,44 @@ export const AgentProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           lastProjectStateRef.current = projectStateStr;
           systemPrompt = builtPrompt;
         }
+
+        // Cargar las habilidades (Skills) guardadas en archivos locales del usuario o localStorage e inyectarlas al contexto
+        try {
+          const skillNames = ['generate_executive_report', 'export_report_data', 'generate_photo_report', 'generate_progress_report', 'add_todo', 'delete_todo', 'generate_new_budget'];
+          let validSkills: string[] = [];
+
+          if ((window as any).electronAPI && typeof (window as any).electronAPI.readSkillFile === 'function') {
+            const skillPromises = skillNames.map(name => 
+              (window as any).electronAPI.readSkillFile(activeProject.id, name)
+                .then((content: string | null) => content ? `### HABILIDAD: ${name}\n${content}` : '')
+                .catch(() => '')
+            );
+            const skillContents = await Promise.all(skillPromises);
+            validSkills = skillContents.filter(Boolean);
+          } else {
+            // Modo Web: cargar de localStorage o fallbacks por defecto
+            validSkills = skillNames.map(name => {
+              const localKey = `lch-skill-${activeProject.id}-${name}`;
+              let saved = localStorage.getItem(localKey);
+              
+              // Migración al vuelo: Si el reporte ejecutivo guardado en localStorage todavía tiene el texto "excel" o "Excel", lo reseteamos al default de Word
+              if (name === 'generate_executive_report' && saved && (saved.includes('excel') || saved.includes('Excel') || saved.includes('formato Excel') || !saved.includes('word'))) {
+                console.log(`[Migration] Detectada regla de reporte ejecutivo obsoleta (Excel) en localStorage para el proyecto ${activeProject.id}. Reseteando a la plantilla Word por defecto.`);
+                saved = LOCAL_DEFAULT_SKILLS[name] || '';
+                localStorage.setItem(localKey, saved);
+              }
+              
+              const content = saved || LOCAL_DEFAULT_SKILLS[name] || '';
+              return content ? `### HABILIDAD: ${name}\n${content}` : '';
+            }).filter(Boolean);
+          }
+
+          if (validSkills.length > 0) {
+            systemPrompt += `\n\nREGLAS DE OPERACIÓN POR HABILIDAD (CONTROL_Skills):\nEl usuario ha definido las siguientes reglas específicas para tus habilidades. Síguelas al pie de la letra:\n\n${validSkills.join('\n\n')}`;
+          }
+        } catch (skillErr) {
+          console.error("Error cargando habilidades para el prompt de sistema:", skillErr);
+        }
       } else {
         systemPrompt = buildProjectSystemInstruction(null);
       }
@@ -534,15 +648,82 @@ export const AgentProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         systemPrompt += `\n\nINSTRUCCIONES DE GESTIÓN DE PENDIENTES:
 - Si el usuario te indica que tiene una nueva tarea, deber, pendiente o actividad por realizar, debes invocar obligatoriamente la herramienta 'add_todo' con el texto descriptivo de la tarea.
 - Si el usuario te indica que ya realizó, completó, terminó o quiere eliminar una tarea/pendiente, debes invocar obligatoriamente la herramienta 'delete_todo' especificando el texto de la tarea a eliminar.
-- Si el usuario te pregunta qué pendientes tiene, respóndele de forma natural basándote en la sección 'TAREAS PENDIENTES REGISTRADAS' listada arriba.
+- Si el usuario te pregunta qué pendientes tiene, puedes consultar 'read_todos' o responder basándote en lo que recuerdas de la lista de pendientes.
 
 INSTRUCCIONES DE REPORTE FOTOGRÁFICO:
 - Si el usuario te pide generar un reporte de fotos, de evidencias o un informe fotográfico (en Word o ZIP) para un rango de fechas, ítem o texto de búsqueda, debes invocar la herramienta 'generate_photo_report' con los filtros correspondientes.
-- La herramienta 'generate_photo_report' recibe 'format' (obligatorio, 'word' o 'zip'), 'dateFrom' (YYYY-MM-DD), 'dateTo' (YYYY-MM-DD), 'itemFilter' e 'textFilter'.`;
+- La herramienta 'generate_photo_report' recibe 'format' (obligatorio, 'word' o 'zip'), 'dateFrom' (YYYY-MM-DD), 'dateTo' (YYYY-MM-DD), 'itemFilter' e 'textFilter'.
+
+INSTRUCCIONES DE GENERACIÓN DE NUEVO PRESUPUESTO (CRÍTICO):
+- Si el usuario te indica que el presupuesto del proyecto cambió, tiene adicionales, variaciones de cantidades o precios (de forma manual o adjuntando archivos), debes invocar obligatoriamente la herramienta 'create_new_budget'.
+- Define un nombre descriptivo para 'versionName' (ej: 'Presupuesto Modificado V1') y envía en 'items' la lista completa estructurada con todos los capítulos, subcapítulos e ítems modificados o nuevos.
+- PROHIBICIÓN DE REDUNDANCIA EN TEXTO: Queda estrictamente PROHIBIDO enumerar o listar detalladamente los ítems del presupuesto como texto en tu respuesta en la burbuja de chat si vas a invocar la herramienta 'create_new_budget'. No repitas la tabla ni listes los códigos/descripciones en prosa. Invoca la herramienta directamente con los datos estructurados en 'items'. Esto evita exceder el límite de tokens y que la respuesta se corte.`;
       }
 
       // Helper interno para procesar y ejecutar el Function Calling de reportes tabulares y tareas pendientes
       const handleAiResponse = async (responseVal: any): Promise<boolean> => {
+        if (responseVal && typeof responseVal === 'object' && responseVal.name === 'create_new_budget') {
+          const args = responseVal.args;
+          const { versionName, items } = args;
+
+          if (!activeProjectId || !activeProject) {
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: '❌ **Error:** Necesitas abrir o seleccionar un proyecto primero para crear presupuestos.'
+            }]);
+            if (!isAgentOpen) setHasUnreadResponse(true);
+            return true;
+          }
+
+          try {
+            createBudgetVersion(activeProjectId, versionName);
+
+            let calculatedTotal = 0;
+            const mappedItems = items.map((it: any) => {
+              const qty = parseRobustNumber(it.cantidad);
+              const unitPrice = parseRobustNumber(it.vlrUnitario);
+              const total = qty * unitPrice;
+              if (it.type === 'item') {
+                calculatedTotal += total;
+              }
+              return {
+                item: String(it.item),
+                descripcion: String(it.descripcion),
+                unidad: String(it.unidad || 'UN'),
+                cantidad: qty,
+                vlrUnitario: unitPrice,
+                vlrTotal: total,
+                type: it.type || 'item'
+              };
+            });
+
+            importBudgetExcel(activeProjectId, mappedItems, calculatedTotal);
+
+            if ((window as any).electronAPI && typeof (window as any).electronAPI.saveProject === 'function') {
+              const updatedProject = projects.find(p => p.id === activeProjectId);
+              if (updatedProject) {
+                (window as any).electronAPI.saveProject(updatedProject)
+                  .then(() => console.log("[IA New Budget] Escenario guardado físicamente."))
+                  .catch((err: any) => console.error("Error al guardar físicamente tras presupuesto IA:", err));
+              }
+            }
+
+            const assistantMsg = `💼 **¡Se ha creado el nuevo presupuesto con éxito!**\n\n` +
+              `*   **Nombre de la Versión/Escenario:** ${versionName}\n` +
+              `*   **Cantidad de Ítems Registrados:** ${mappedItems.length}\n` +
+              `*   **Costo Directo Total Calculado:** $${calculatedTotal.toLocaleString('es-CO')}\n\n` +
+              `Este presupuesto se ha configurado como la versión **activa** y ya puedes visualizarlo y seleccionarlo en la pantalla de Presupuesto.`;
+
+            setMessages(prev => [...prev, { role: 'assistant', content: assistantMsg }]);
+          } catch (err: any) {
+            console.error("Error al crear el nuevo presupuesto:", err);
+            setMessages(prev => [...prev, { role: 'assistant', content: `❌ **Error al crear el presupuesto: ${err.message || String(err)}**` }]);
+          }
+
+          if (!isAgentOpen) setHasUnreadResponse(true);
+          return true;
+        }
+
         if (responseVal && typeof responseVal === 'object' && responseVal.name === 'generate_photo_report') {
           const args = responseVal.args;
           const { dateFrom, dateTo, itemFilter, textFilter, format } = args;
@@ -756,13 +937,13 @@ INSTRUCCIONES DE REPORTE FOTOGRÁFICO:
           // Exportar según el formato solicitado
           if (args.format === 'excel' || args.format === 'both') {
             const { exportToExcel } = await import('../utils/excelExport');
-            exportToExcel(args.tableData, args.title, 'Reporte Interventoría');
+            exportToExcel(args.tableData, args.title, 'Reporte Interventoría', activeProject);
           }
           
           if (args.format === 'word' || args.format === 'both') {
             const { exportAIReportToWord } = await import('../utils/aiReportExport');
             if (activeProject) {
-              exportAIReportToWord(activeProject, reportMarkdown);
+              exportAIReportToWord(activeProject, args.title, args.summary);
             }
           }
 
@@ -775,11 +956,11 @@ INSTRUCCIONES DE REPORTE FOTOGRÁFICO:
           }
 
           const assistantMsg = `📊 **¡Reporte Generado Exitosamente!**
-
+ 
 *   **Título:** ${args.title}
 *   **Formato de Exportación:** ${args.format.toUpperCase()}
 *   **Resumen Ejecutivo:** ${args.summary}
-
+ 
 El archivo estructurado se ha generado y descargado a tu sistema siguiendo la paleta de colores de LCH Ingeniería (texto negro, títulos gris oscuro, cabeceras gris claro, tipografía Arial). Se ha guardado una copia en formato Markdown de forma local.`;
 
           setMessages(prev => [...prev, { role: 'assistant', content: assistantMsg }]);
@@ -869,6 +1050,143 @@ El archivo estructurado se ha generado y descargado a tu sistema siguiendo la pa
           return true;
         }
 
+        if (responseVal && typeof responseVal === 'object' && responseVal.name === 'generate_executive_report') {
+          const args = responseVal.args;
+          if (!activeProjectId || !activeProject) {
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: '❌ **Error:** Necesitas abrir o seleccionar un proyecto primero para que pueda generar el informe ejecutivo.'
+            }]);
+            if (!isAgentOpen) setHasUnreadResponse(true);
+            return true;
+          }
+
+          // Determinar período
+          const selectedMonth: string = args.selectedMonth || new Date().toISOString().slice(0, 7);
+          const [yyyy, mm] = selectedMonth.split('-').map(Number);
+          const autoDateFrom = args.dateFrom || `${yyyy}-${String(mm).padStart(2, '0')}-01`;
+          const lastDay = new Date(yyyy, mm, 0).getDate();
+          const autoDateTo = args.dateTo || `${yyyy}-${String(mm).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+          // Buscar informe guardado del mismo mes
+          const savedReport = (activeProject.executiveReports || []).find(r => r.selectedMonth === selectedMonth);
+
+          // REGLA CRÍTICA: NUNCA usar narrativa del modelo (puede ser inventada).
+          // Prioridad: (1) narrativa persistida en reportConfig del proyecto → (2) narrativa del informe guardado → (3) texto neutral base
+          const persistedNarrative = activeProject.reportConfig?.executiveNarratives?.[selectedMonth];
+          const narrative = persistedNarrative 
+            || savedReport?.narrativeText 
+            || `Informe Ejecutivo del período ${autoDateFrom} al ${autoDateTo}. Los datos de avance se presentan a continuación según el registro de obra actualizado a la fecha de corte.`;
+
+          // Calcular avances reales del proyecto (los únicos datos válidos)
+          const { calculateProgressData, calculatePlannedPctAtCutoff, generateSCurvePng, fmtQty, fmtCurrency, fmtPct } = await import('../utils/progressCalculator');
+          const progressData = calculateProgressData(activeProject, autoDateTo);
+          const execPct = progressData?.pctTotal ?? 0;
+          const plannedPct = calculatePlannedPctAtCutoff(activeProject, autoDateTo);
+
+          // Caption de curva S: SIEMPRE con los % reales calculados arriba, nunca inventados.
+          // Prioridad: (1) caption persistido en reportConfig → (2) caption del informe guardado → (3) auto-generado con datos reales
+          const persistedCaption = activeProject.reportConfig?.sCurveCaptions?.[selectedMonth];
+          const autoCaption = `Al corte del presente informe, el proyecto expone un avance ejecutado por el orden del ${fmtPct(execPct)}, contra una programación que, a la misma fecha de corte, exige un avance del ${fmtPct(plannedPct)}.`;
+          const sCurveCaption = persistedCaption || savedReport?.sCurveCaption || autoCaption;
+
+          // Notificar en chat
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: `📄 **Generando Informe Ejecutivo...**\n- Período: **${selectedMonth}** (${autoDateFrom} → ${autoDateTo})\n- Avance físico ejecutado: **${execPct.toFixed(2)}%**\n- Programado a la fecha: **${plannedPct.toFixed(2)}%**\n\nPor favor, espera un momento...`
+          }]);
+
+          try {
+            // Generar curva S PNG
+            const chartConfig = {
+              plannedColor: '#00E5FF', executedColor: '#c5ff00', financialColor: '#FFAB00',
+              plannedWidth: 1.2, executedWidth: 3, financialWidth: 1,
+              plannedDashArray: '4 2', financialDashArray: '3 3',
+              gridVisible: true, gridColor: 'rgba(128,128,128,0.15)',
+              axisFontSize: 10, labelFontSize: 9, legendFontSize: 11,
+              pointSize: 3, axisColor: '#94a3b8',
+              executedGlowRadius: 4, plannedGlowRadius: 2, financialGlowRadius: 2,
+              executedFillOpacity: 0.08
+            };
+            const visibleCurves = activeProject.visibleCurves || { planned: true, executed: true, financial: true };
+            const showStatusLine = activeProject.showStatusLine !== false;
+            const curveSBase64 = await generateSCurvePng(activeProject, autoDateTo, chartConfig, 'months', showStatusLine, visibleCurves);
+
+            // Construir filas de la tabla de avance
+            const tableRows: string[][] = [];
+            if (progressData) {
+              progressData.tableRows.forEach(r => {
+                if (r.isTitle) {
+                  tableRows.push([r.item + ' ' + r.description, '', '', '', '', '', '', '', '']);
+                } else {
+                  tableRows.push([
+                    r.item, r.description, r.unit,
+                    fmtQty(r.contractedQty), fmtCurrency(r.unitPrice), fmtCurrency(r.contractedTotal),
+                    fmtQty(r.acumQty), fmtCurrency(r.acumValue), fmtPct(r.pctExecution)
+                  ]);
+                }
+              });
+              tableRows.push(['COSTO DIRECTO', '', '', '', '', fmtCurrency(progressData.costoDirectoContratado), '', fmtCurrency(progressData.costoDirectoEjecutado), fmtPct(progressData.pctCostoDirecto)]);
+              tableRows.push([`AIU (${progressData.aiuPct}%)`, '', '', '', '', fmtCurrency(progressData.aiuContratado), '', fmtCurrency(progressData.aiuEjecutado), fmtPct(progressData.pctAiu)]);
+              tableRows.push(['TOTAL DE OBRA', '', '', '', '', fmtCurrency(progressData.totalContratado), '', fmtCurrency(progressData.totalEjecutado), fmtPct(progressData.pctTotal)]);
+            }
+
+            // Seleccionar fotos del período
+            const periodPhotos = (activeProject.logiEntries || []).filter(e => e.date >= autoDateFrom && e.date <= autoDateTo);
+            const excludedIds = new Set(savedReport?.excludedPhotoIds || []);
+            const photos = periodPhotos.filter(p => !excludedIds.has(p.id));
+
+            // Llamar al exportador
+            const { exportExecutiveReportToWord } = await import('../utils/executiveReportExporter');
+            const config = activeProject.reportConfig || {};
+            const monthLabel = `${selectedMonth}`;
+            await exportExecutiveReportToWord(activeProject, {
+              projectName: config.objetoObra || activeProject.name,
+              projectCode: config.noContrato || activeProject.code,
+              periodLabel: `${monthLabel} (del ${autoDateFrom} al ${autoDateTo})`,
+              narrativeText: narrative,
+              tableRows,
+              curveSBase64,
+              photos,
+              sCurveCaption
+            });
+
+            // Guardar el reporte en executiveReports del proyecto
+            try {
+              addExecutiveReport(activeProjectId, {
+                name: `Informe Ejecutivo ${monthLabel} (IA)`,
+                selectedMonth,
+                dateFrom: autoDateFrom,
+                dateTo: autoDateTo,
+                narrativeText: narrative,
+                excludedPhotoIds: [],
+                sCurveCaption
+              });
+            } catch (saveErr) {
+              console.warn('[Agent] No se pudo registrar el informe ejecutivo en el proyecto:', saveErr);
+            }
+
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: `✅ **¡Informe Ejecutivo generado y descargado!**\n\n` +
+                `- **Período:** ${monthLabel} (${autoDateFrom} → ${autoDateTo})\n` +
+                `- **Avance Ejecutado:** ${execPct.toFixed(2)}%\n` +
+                `- **Programado a la fecha:** ${plannedPct.toFixed(2)}%\n` +
+                `- **Fotos incluidas:** ${photos.length}\n\n` +
+                `El archivo \`.doc\` se ha descargado a tu equipo y el informe ha quedado registrado en la sección de Informes Guardados.`
+            }]);
+          } catch (err: any) {
+            console.error('[Agent] Error generando informe ejecutivo:', err);
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: `❌ **Error al generar el Informe Ejecutivo:** ${err.message || String(err)}`
+            }]);
+          }
+
+          if (!isAgentOpen) setHasUnreadResponse(true);
+          return true;
+        }
+
         if (typeof responseVal === 'string' && responseVal.trim().length > 0) {
           processAiActions(responseVal);
           setMessages(prev => [...prev, { role: 'assistant', content: responseVal }]);
@@ -879,114 +1197,268 @@ El archivo estructurado se ha generado y descargado a tu sistema siguiendo la pa
         return false;
       };
 
-      if (activeProject) {
-        // Optimización de llamadas: Solo lanzar el decision router ReAct si la pregunta contiene palabras clave de bases de datos
-        const needsDataPackage = 
-          normalizedContent.includes('avance') ||
-          normalizedContent.includes('ejecut') ||
-          normalizedContent.includes('program') ||
-          normalizedContent.includes('cronogram') ||
-          normalizedContent.includes('presupuesto') ||
-          normalizedContent.includes('costo') ||
-          normalizedContent.includes('valora') ||
-          normalizedContent.includes('tarea') ||
-          normalizedContent.includes('foto') ||
-          normalizedContent.includes('imagen') ||
-          normalizedContent.includes('registro') ||
-          normalizedContent.includes('especificaci');
+      const activeTools = [
+        GENERATE_EXECUTIVE_REPORT_TOOL, EXPORT_REPORT_DATA_TOOL, ADD_TODO_TOOL, DELETE_TODO_TOOL, GENERATE_PHOTO_REPORT_TOOL, GENERATE_PROGRESS_REPORT_TOOL, CREATE_NEW_BUDGET_TOOL,
+        READ_BUDGET_TOOL, READ_PROGRESS_REPORTS_TOOL, READ_PARTIAL_REPORTS_TOOL, READ_APUS_TOOL, READ_COST_RESOURCES_TOOL, READ_COST_TRANSACTIONS_TOOL, READ_CORRESPONDENCE_TOOL, READ_TODOS_TOOL,
+        READ_RAW_BUDGET_CHUNK_TOOL, WRITE_BUDGET_DRAFT_CHUNK_TOOL
+      ];
 
-        let selectedPackage = 'NINGUNO';
+      let updatedMessages = [...messages, userMsgForAi];
+      let loopCount = 0;
+      const maxLoops = 6;
+      let keepRunning = true;
+      let finalAiResponse: any = null;
 
-        if (needsDataPackage) {
-          const decisionPrompt = `El usuario te ha preguntado: "${content}".\n\nLee el siguiente GLOSARIO de paquetes de datos disponibles:\n\n${AI_GLOSSARY}\n\nSelecciona QUÉ paquete de datos necesitas para poder responder a su pregunta. Debes responder ÚNICA y EXCLUSIVAMENTE con el NOMBRE EXACTO del paquete (una sola palabra). No des explicaciones, no saludes, solo el nombre del paquete.`;
+      while (keepRunning && loopCount < maxLoops) {
+        loopCount++;
+        console.log(`[Agent ReAct Loop] Iteración ${loopCount}...`);
+        
+        const aiResponse = await chatWithAgent(
+          updatedMessages,
+          systemPrompt,
+          undefined,
+          { tools: activeTools, apiKey: activeProject?.geminiApiKey }
+        );
 
-          try {
-            const decisionMessages: import('../services/aiService').ChatMessage[] = [{ role: 'user', content: decisionPrompt }];
-            const decisionResponse = await chatWithAgent(decisionMessages, "Eres un enrutador de datos estricto. Tu única salida permitida es el nombre de un paquete en mayúsculas.", undefined, { apiKey: activeProject?.geminiApiKey });
+        if (aiResponse && typeof aiResponse === 'object' && aiResponse.name) {
+          const toolName = aiResponse.name;
+          const args = aiResponse.args;
 
-            selectedPackage = decisionResponse.trim().replace(/[^a-zA-Z_]/g, '').toUpperCase();
-            console.log(`[ReAct] Gemini solicitó el paquete: ${selectedPackage}`);
-          } catch (e) {
-            console.warn("[ReAct] Falló la consulta de decisión, procediendo sin datos", e);
-          }
-        } else {
-          console.log("[ReAct Router] Saltando decisión. Consulta conversacional o de pendientes simple.");
-        }
+          if (toolName.startsWith('read_') || toolName === 'write_budget_draft_chunk') {
+            console.log(`[Agent ReAct Loop] Ejecutando consulta de lectura: ${toolName}`, args);
+            let toolOutput: any = null;
 
-        if (selectedPackage && selectedPackage !== 'NINGUNO') {
-          const response = getPackageData(selectedPackage, activeProject, content);
-          const { textChunks, images } = response;
-          
-          if (textChunks.length === 1) {
-            systemPrompt += `\n\nTe he traído los datos de la base que solicitaste:\n${textChunks[0]}`;
-            
-            const updatedMessages: ChatMessage[] = [...messages, userMsg];
-            
-            if (images && images.length > 0) {
-              const lastMsg = updatedMessages[updatedMessages.length - 1];
-              const multimodalContent: MessageContent[] = [
-                { type: 'text', text: typeof lastMsg.content === 'string' ? lastMsg.content : '' },
-                ...images.map(url => ({ 
-                  type: 'image_url' as const, 
-                  image_url: { url }
-                }))
-              ];
-              updatedMessages[updatedMessages.length - 1] = { ...lastMsg, content: multimodalContent };
+            if (activeProject) {
+              switch (toolName) {
+                case 'read_raw_budget_chunk': {
+                  const lineStart = Number(args?.lineStart || 1);
+                  const chunkSize = Number(args?.chunkSize || 20);
+                  const rawText = activeProject.budgetRawText || '';
+                  const lines = rawText.split('\n');
+                  
+                  const startIdx = Math.max(0, lineStart - 1);
+                  const endIdx = Math.min(lines.length, startIdx + chunkSize);
+                  const chunkLines = lines.slice(startIdx, endIdx);
+                  
+                  toolOutput = {
+                    totalLines: lines.length,
+                    lineStart: startIdx + 1,
+                    lineEnd: endIdx,
+                    chunk: chunkLines.join('\n'),
+                    hasMore: endIdx < lines.length
+                  };
+                  break;
+                }
+                case 'write_budget_draft_chunk': {
+                  const versionName = args?.versionName || 'Presupuesto Modificado V1';
+                  const itemsInput = args?.items || [];
+                  
+                  const parsedItems = itemsInput.map((it: any) => {
+                    const qty = parseRobustNumber(it.cantidad);
+                    const unitPrice = parseRobustNumber(it.vlrUnitario);
+                    return {
+                      item: String(it.item),
+                      descripcion: String(it.descripcion),
+                      unidad: String(it.unidad || 'UN'),
+                      cantidad: qty,
+                      vlrUnitario: unitPrice,
+                      vlrTotal: qty * unitPrice,
+                      type: it.type || 'item'
+                    };
+                  });
+                  
+                  const currentDraft = activeProject.budgetDraft || { versionName, items: [] };
+                  const existingItems = [...currentDraft.items];
+                  parsedItems.forEach((newItem: any) => {
+                    const idx = existingItems.findIndex(i => i.item === newItem.item);
+                    if (idx !== -1) {
+                      existingItems[idx] = newItem;
+                    } else {
+                      existingItems.push(newItem);
+                    }
+                  });
+                  
+                  const updatedDraft = {
+                    versionName,
+                    items: existingItems
+                  };
+                  
+                  updateProject(activeProject.id, { budgetDraft: updatedDraft });
+                  
+                  if ((window as any).electronAPI && typeof (window as any).electronAPI.saveProject === 'function') {
+                    const updatedProj = {
+                      ...activeProject,
+                      budgetDraft: updatedDraft
+                    };
+                    (window as any).electronAPI.saveProject(updatedProj)
+                      .catch((err: any) => console.error("Error al guardar físicamente tras borrador chunk:", err));
+                  }
+                  
+                  toolOutput = {
+                    success: true,
+                    totalItemsInDraft: existingItems.length,
+                    message: `Se guardaron ${parsedItems.length} ítems. Total en borrador: ${existingItems.length}.`
+                  };
+                  break;
+                }
+                case 'read_budget': {
+                  const activeVersion = activeProject.budgetVersions?.find(v => v.id === activeProject.activeBudgetVersionId) || activeProject.budgetVersions?.[0];
+                  const items = activeVersion ? activeVersion.items : activeProject.budgetItems || [];
+                  toolOutput = items.map(i => ({
+                    item: i.item,
+                    descripcion: i.descripcion,
+                    unidad: i.unidad,
+                    cantidad: i.cantidad,
+                    vlrUnitario: i.vlrUnitario,
+                    vlrTotal: i.vlrTotal,
+                    type: i.type,
+                    startDate: i.startDate,
+                    endDate: i.endDate
+                  }));
+                  break;
+                }
+                case 'read_progress_reports': {
+                  toolOutput = (activeProject.progressReports || []).map(r => ({
+                    name: r.name,
+                    date: r.date,
+                    entries: r.entries
+                  }));
+                  break;
+                }
+                case 'read_partial_reports': {
+                  toolOutput = (activeProject.partialReports || []).map(r => ({
+                    name: r.name,
+                    date: r.date,
+                    entries: r.entries
+                  }));
+                  break;
+                }
+                case 'read_apus': {
+                  const itemFilter = args?.itemCode ? String(args.itemCode).toLowerCase().trim() : null;
+                  let apus = activeProject.activityAPUs || [];
+                  if (itemFilter) {
+                    apus = apus.filter(apu => apu.itemCode.toLowerCase().includes(itemFilter));
+                  }
+                  toolOutput = apus.map(apu => ({
+                    itemCode: apu.itemCode,
+                    materials: apu.materials,
+                    labor: apu.labor,
+                    equipment: apu.equipment,
+                    transport: apu.transport,
+                    pdfFileName: apu.pdfFileName
+                  }));
+                  break;
+                }
+                case 'read_cost_resources': {
+                  toolOutput = (activeProject.costResources || []).map(r => ({
+                    code: r.code,
+                    description: r.description,
+                    type: r.type,
+                    unit: r.unit,
+                    referencePrice: r.referencePrice
+                  }));
+                  break;
+                }
+                case 'read_cost_transactions': {
+                  toolOutput = (activeProject.costTransactions || []).map(t => ({
+                    date: t.date,
+                    itemCode: t.itemCode,
+                    resourceType: t.resourceType,
+                    description: t.description,
+                    quantity: t.quantity,
+                    unitPrice: t.unitPrice,
+                    totalPrice: t.totalPrice,
+                    provider: t.provider,
+                    invoiceNumber: t.invoiceNumber
+                  }));
+                  break;
+                }
+                case 'read_correspondence': {
+                  const files = (activeProject.correspondenceFiles || []).map(f => {
+                    const folder = (activeProject.correspondenceFolders || []).find(fol => fol.id === f.folderId);
+                    return {
+                      name: f.name,
+                      folderName: folder ? folder.name : 'Raíz',
+                      uploadDate: f.uploadDate,
+                      date: f.metadata?.date,
+                      sender: f.metadata?.sender,
+                      receiver: f.metadata?.receiver,
+                      subject: f.metadata?.subject,
+                      summary: f.metadata?.summary,
+                      status: f.metadata?.status,
+                      followUpDeadline: f.metadata?.followUpDeadline
+                    };
+                  });
+                  const emails = (activeProject.gmailEmails || []).map(e => ({
+                    date: e.date,
+                    direction: e.direction,
+                    sender: e.sender,
+                    receiver: e.receiver,
+                    subject: e.subject,
+                    bodySnippet: e.bodySnippet,
+                    category: e.category
+                  }));
+                  toolOutput = { correspondenceFiles: files, gmailEmails: emails };
+                  break;
+                }
+                case 'read_todos': {
+                  toolOutput = (activeProject.agentTodos || []).map(t => ({
+                    text: t.text,
+                    createdAt: t.createdAt,
+                    completed: t.completed,
+                    completedAt: t.completedAt
+                  }));
+                  break;
+                }
+                default:
+                  toolOutput = { error: 'Herramienta de lectura no reconocida.' };
+              }
+            } else {
+              toolOutput = { error: 'No hay ningún proyecto activo cargado.' };
             }
 
-            const aiResponse = await chatWithAgent(updatedMessages, systemPrompt, undefined, { tools: [EXPORT_REPORT_DATA_TOOL, ADD_TODO_TOOL, DELETE_TODO_TOOL, GENERATE_PHOTO_REPORT_TOOL, GENERATE_PROGRESS_REPORT_TOOL], apiKey: activeProject?.geminiApiKey });
-            const processed = await handleAiResponse(aiResponse);
-            if (processed) {
-              setIsLoading(false);
-              sendingRef.current = false;
-              return;
-            }
-          } else if (textChunks.length > 1) {
-            let fullResponse = "";
-            for (let i = 0; i < textChunks.length; i++) {
-              setTaskProgress({ 
-                currentChunk: i + 1, 
-                totalChunks: textChunks.length, 
-                statusText: `Analizando ${selectedPackage} (Lote ${i + 1} de ${textChunks.length})...` 
-              });
-              
-              let iterPrompt = systemPrompt + `\n\nTe estoy enviando un paquete de datos (Lote ${i + 1} de ${textChunks.length}).\n\n${textChunks[i]}`;
-              iterPrompt += `\n\nINSTRUCCIÓN: Lee ÚNICAMENTE la información de este lote y responde a: "${content}".`;
+            const assistantCallMsg: ChatMessage = {
+              role: 'assistant',
+              content: '',
+              functionCall: {
+                name: toolName,
+                args: args
+              }
+            };
 
-              const iterMessages: import('../services/aiService').ChatMessage[] = [
-                { role: 'user', content: content }
-              ];
-              
-              const aiResponse = await chatWithAgent(iterMessages, iterPrompt, undefined, { tools: [EXPORT_REPORT_DATA_TOOL, ADD_TODO_TOOL, DELETE_TODO_TOOL, GENERATE_PHOTO_REPORT_TOOL, GENERATE_PROGRESS_REPORT_TOOL], apiKey: activeProject?.geminiApiKey });
-              
-              if (aiResponse && typeof aiResponse === 'object') {
-                const processed = await handleAiResponse(aiResponse);
-                if (processed) {
-                  setTaskProgress(null);
-                  setIsLoading(false);
-                  sendingRef.current = false;
-                  return;
+            const toolResponseMsg: ChatMessage = {
+              role: 'function',
+              content: '',
+              functionResponse: {
+                name: toolName,
+                response: {
+                  output: toolOutput
                 }
               }
-              
-              fullResponse += aiResponse + "\n\n";
-            }
-            
-            processAiActions(fullResponse);
-            setMessages(prev => [...prev, { role: 'assistant', content: fullResponse.trim() }]);
-            if (!isAgentOpen) setHasUnreadResponse(true);
-            setTaskProgress(null);
-            setIsLoading(false);
-            sendingRef.current = false;
-            return;
+            };
+
+            updatedMessages = [...updatedMessages, assistantCallMsg, toolResponseMsg];
+          } else {
+            finalAiResponse = aiResponse;
+            keepRunning = false;
           }
+        } else {
+          finalAiResponse = aiResponse;
+          keepRunning = false;
         }
       }
 
-      const updatedMessages = [...messages, userMsg];
-      const aiResponse = await chatWithAgent(updatedMessages, systemPrompt, undefined, { tools: [EXPORT_REPORT_DATA_TOOL, ADD_TODO_TOOL, DELETE_TODO_TOOL, GENERATE_PHOTO_REPORT_TOOL, GENERATE_PROGRESS_REPORT_TOOL], apiKey: activeProject?.geminiApiKey });
+      if (!finalAiResponse) {
+        setMessages(prev => [...prev, { 
+          role: 'assistant', 
+          content: 'No se obtuvo una respuesta válida del agente.' 
+        }]);
+        setIsLoading(false);
+        sendingRef.current = false;
+        return;
+      }
 
-      const processed = await handleAiResponse(aiResponse);
+      const processed = await handleAiResponse(finalAiResponse);
       if (!processed) {
         setMessages(prev => [...prev, { role: 'assistant', content: 'No se obtuvo una respuesta válida del agente.' }]);
       }

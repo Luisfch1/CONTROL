@@ -1,10 +1,15 @@
-export type Role = 'system' | 'user' | 'assistant';
+export type Role = 'system' | 'user' | 'assistant' | 'function';
 
 export interface MessageContent {
-  type: 'text' | 'image_url';
+  type: 'text' | 'image_url' | 'file';
   text?: string;
   image_url?: {
     url: string; // URL o Base64 o Blob URL
+  };
+  file?: {
+    url: string; // Base64 data URL
+    name: string;
+    mimeType: string;
   };
 }
 
@@ -12,6 +17,15 @@ export interface ChatMessage {
   role: Role;
   content: string | MessageContent[];
   isReport?: boolean;
+  timestamp?: string;
+  functionCall?: {
+    name: string;
+    args: any;
+  };
+  functionResponse?: {
+    name: string;
+    response: any;
+  };
 }
 
 export interface AIConfig {
@@ -68,11 +82,27 @@ const mapMessagesToGemini = async (messages: ChatMessage[]): Promise<any[]> => {
     // El system prompt se pasa por fuera en systemInstruction de Gemini
     if (msg.role === 'system') continue;
 
-    const role = msg.role === 'assistant' ? 'model' : 'user';
+    let role = 'user';
+    if (msg.role === 'assistant') {
+      role = 'model';
+    } else if (msg.role === 'function') {
+      role = 'function';
+    }
+
     const parts: any[] = [];
 
-    if (typeof msg.content === 'string') {
-      parts.push({ text: msg.content });
+    if (msg.role === 'function' && msg.functionResponse) {
+      parts.push({
+        functionResponse: msg.functionResponse
+      });
+    } else if (msg.role === 'assistant' && msg.functionCall) {
+      parts.push({
+        functionCall: msg.functionCall
+      });
+    } else if (typeof msg.content === 'string') {
+      if (msg.content) {
+        parts.push({ text: msg.content });
+      }
     } else if (Array.isArray(msg.content)) {
       for (const part of msg.content) {
         if (part.type === 'text') {
@@ -111,6 +141,18 @@ const mapMessagesToGemini = async (messages: ChatMessage[]): Promise<any[]> => {
             } catch (err) {
               console.error("Error al procesar la imagen para Gemini:", url, err);
             }
+          }
+        } else if (part.type === 'file' && part.file?.url) {
+          const url = part.file.url;
+          if (url.startsWith('data:')) {
+            const mimeType = url.substring(url.indexOf(':') + 1, url.indexOf(';'));
+            const data = url.substring(url.indexOf(',') + 1);
+            parts.push({
+              inlineData: {
+                mimeType,
+                data
+              }
+            });
           }
         }
       }
@@ -200,8 +242,8 @@ export const chatWithAgent = async (
 
   const candidates: Candidate[] = [
     {
-      name: 'v1beta / gemini-3.1-flash-lite',
-      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`,
+      name: 'v1beta / gemini-2.5-flash',
+      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
       isV1Fallback: false
     },
     {
@@ -210,28 +252,23 @@ export const chatWithAgent = async (
       isV1Fallback: false
     },
     {
-      name: 'v1beta / gemini-2.5-flash',
-      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+      name: 'v1beta / gemini-1.5-flash',
+      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
       isV1Fallback: false
     },
     {
-      name: 'v1beta / gemini-3.5-flash',
-      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`,
+      name: 'v1beta / gemini-2.5-pro',
+      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${apiKey}`,
       isV1Fallback: false
     },
     {
-      name: 'v1beta / gemini-2.0-flash',
-      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-      isV1Fallback: false
-    },
-    {
-      name: 'v1 / gemini-3.1-flash-lite',
-      url: `https://generativelanguage.googleapis.com/v1/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`,
+      name: 'v1 / gemini-2.5-flash',
+      url: `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
       isV1Fallback: true
     },
     {
-      name: 'v1 / gemini-2.5-flash-lite',
-      url: `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`,
+      name: 'v1 / gemini-1.5-flash',
+      url: `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
       isV1Fallback: true
     }
   ];
@@ -258,15 +295,31 @@ export const chatWithAgent = async (
     const startTime = Date.now();
     console.log(`[AI Service] Intentando conexión con candidato: ${candidate.name}...`);
 
-    // Clonar contents para evitar mutar el original en múltiples intentos
-    let requestContents = JSON.parse(JSON.stringify(contents));
+    // Clonar contents para evitar mutar el original en múltiples intentos de forma robusta
+    let requestContents;
+    try {
+      requestContents = JSON.parse(JSON.stringify(contents));
+    } catch (e) {
+      console.warn("[AI Service] Error al serializar el contenido de mensajes (historial grande). Recortando historial...", e);
+      const systemMessage = contents.find(m => m.role === 'system');
+      const lastMessages = contents.slice(-3); // Conservar últimos 3 turnos
+      const pruned = systemMessage ? [systemMessage, ...lastMessages] : lastMessages;
+      requestContents = JSON.parse(JSON.stringify(pruned));
+    }
 
     const requestBody: any = {
       contents: requestContents,
       generationConfig: {
         temperature: 0.7,
-        maxOutputTokens: 2048,
-      }
+        maxOutputTokens: 8192,
+      },
+      safetySettings: [
+        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "BLOCK_NONE" }
+      ]
     };
 
     if (candidate.isV1Fallback) {
@@ -297,8 +350,10 @@ export const chatWithAgent = async (
       }
     }
 
+    const isLite = candidate.name.toLowerCase().includes('lite') || candidate.name.toLowerCase().includes('flash');
+    const timeoutMs = isLite ? 15000 : 25000;
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     let response: Response;
     let fetchDurationMs = 0;
@@ -320,7 +375,7 @@ export const chatWithAgent = async (
 
       const durationMs = Date.now() - startTime;
       const errorText = error.name === 'AbortError'
-        ? "⏱️ Tiempo de espera agotado. La API de Gemini tardó más de 60 segundos en responder."
+        ? `⏱️ Tiempo de espera agotado. La API de Gemini tardó más de ${timeoutMs / 1000} segundos en responder.`
         : error.message || String(error);
 
       // Registrar error de red una sola vez
@@ -335,7 +390,7 @@ export const chatWithAgent = async (
       });
 
       if (error.name === 'AbortError') {
-        lastError = new Error("⏱️ Tiempo de espera agotado. La API de Gemini tardó más de 60 segundos en responder.");
+        lastError = new Error(`⏱️ Tiempo de espera agotado. La API de Gemini tardó más de ${timeoutMs / 1000} segundos en responder.`);
       } else {
         lastError = error;
       }
@@ -367,12 +422,22 @@ export const chatWithAgent = async (
         error: errorMessage
       });
 
+      const lowerError = errorMessage.toLowerCase();
+      const isApiKeyError = 
+        response.status === 400 && (lowerError.includes('api key') || lowerError.includes('key not valid') || lowerError.includes('expired'));
+      const isExpiredKey =
+        response.status === 403 && (lowerError.includes('expired') || lowerError.includes('api key') || lowerError.includes('invalid') || lowerError.includes('forbidden') || lowerError.includes('api_key'));
+
+      if (isApiKeyError || isExpiredKey) {
+        throw new Error(`🔑 Error de API Key de Gemini: ${errorMessage}. Por favor, verifica tu clave API en la configuración del agente.`);
+      }
+
       // Comprobar si es un error de modelo no encontrado o de versión no soportada
       const isModelNotFoundError =
         response.status === 404 ||
-        errorMessage.toLowerCase().includes('not found') ||
-        errorMessage.toLowerCase().includes('not supported') ||
-        errorMessage.toLowerCase().includes('modelservice');
+        lowerError.includes('not found') ||
+        lowerError.includes('not supported') ||
+        lowerError.includes('modelservice');
 
       if (isModelNotFoundError && i < candidates.length - 1) {
         console.warn(`[AI Service] Modelo no encontrado en ${candidate.name}. Error: ${errorMessage}. Probando siguiente fallback...`);
@@ -380,7 +445,7 @@ export const chatWithAgent = async (
         continue; // Probar el siguiente candidato
       }
 
-      // Errores de cuota (Rate Limit / Quota Exceeded): probamos el siguiente candidato por si es específico de este modelo (ej: límite 0 en 2.0-flash)
+      // Errores de cuota (Rate Limit / Quota Exceeded): probamos el siguiente candidato por si es específico de este modelo
       if (response.status === 429) {
         console.warn(`[AI Service] Modelo ${candidate.name} retornó 429 (Cuota/Límite excedido). Probando siguiente candidato...`);
         lastError = new Error(`⚠️ Cuota de API excedida (Rate Limit): ${errorMessage}.`);
@@ -388,8 +453,6 @@ export const chatWithAgent = async (
           continue;
         }
         throw lastError;
-      } else if (response.status === 400 && errorMessage.toLowerCase().includes('api key')) {
-        throw new Error(`🔑 API Key Inválida: La clave de API configurada no es correcta o expiró. Si acabas de generar una nueva clave API en Google AI Studio, ten en cuenta que Google suele tardar entre 1 y 2 minutos en replicar y activar la clave globalmente. Por favor, espera un momento y vuelve a intentar.`);
       }
 
       lastError = new Error(`Error en Google AI Studio (${candidate.name}): ${errorMessage}`);
@@ -406,7 +469,12 @@ export const chatWithAgent = async (
 
       const candidateResponse = data.candidates?.[0];
       if (!candidateResponse) {
-        const errStr = "No se recibió respuesta o fue bloqueada por filtros de seguridad de Google.";
+        const promptFeedback = data.promptFeedback;
+        let blockReason = "";
+        if (promptFeedback?.blockReason) {
+          blockReason = ` (Bloqueado por: ${promptFeedback.blockReason})`;
+        }
+        const errStr = `No se recibió respuesta o fue bloqueada por los filtros de seguridad de Google${blockReason}.`;
         addAuditLog({
           model: candidate.name,
           url: candidate.url,
@@ -419,9 +487,24 @@ export const chatWithAgent = async (
         throw new Error(errStr);
       }
 
-      const part = candidateResponse.content?.parts?.[0];
-      if (!part) {
-        const errStr = "La respuesta recibida no contiene datos legibles.";
+      const finishReason = candidateResponse.finishReason;
+      if (finishReason && finishReason !== 'STOP' && finishReason !== 'MAX_TOKENS') {
+        const errStr = `La respuesta no finalizó correctamente (Motivo: ${finishReason}).`;
+        addAuditLog({
+          model: candidate.name,
+          url: candidate.url,
+          status: response.status,
+          durationMs,
+          systemPrompt,
+          messages,
+          error: errStr
+        });
+        throw new Error(errStr);
+      }
+
+      const parts = candidateResponse.content?.parts;
+      if (!parts || !Array.isArray(parts) || parts.length === 0) {
+        const errStr = `La respuesta recibida no contiene partes legibles (Finish Reason: ${finishReason || 'Desconocido'}).`;
         addAuditLog({
           model: candidate.name,
           url: candidate.url,
@@ -441,7 +524,28 @@ export const chatWithAgent = async (
         console.warn('[AI Service] No se pudo guardar el candidato exitoso en localStorage', e);
       }
 
-      const resultPayload = part.functionCall || part.text || '';
+      // Buscar si algún part contiene una llamada a función
+      const functionCallPart = parts.find((p: any) => p.functionCall);
+      if (functionCallPart) {
+        addAuditLog({
+          model: candidate.name,
+          url: candidate.url,
+          status: response.status,
+          durationMs,
+          systemPrompt,
+          messages,
+          response: functionCallPart.functionCall
+        });
+        return functionCallPart.functionCall;
+      }
+
+      // Si no hay llamada a función, concatenar todos los textos
+      const textResponse = parts
+        .filter((p: any) => p.text)
+        .map((p: any) => p.text)
+        .join('\n')
+        .trim();
+
       addAuditLog({
         model: candidate.name,
         url: candidate.url,
@@ -449,14 +553,10 @@ export const chatWithAgent = async (
         durationMs,
         systemPrompt,
         messages,
-        response: resultPayload
+        response: textResponse
       });
 
-      if (part.functionCall) {
-        return part.functionCall;
-      }
-
-      return part.text || '';
+      return textResponse;
     } catch (parseError: any) {
       console.error(`[AI Service] Error parseando respuesta exitosa de ${candidate.name}:`, parseError);
       lastError = parseError;

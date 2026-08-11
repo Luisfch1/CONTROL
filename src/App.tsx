@@ -17,7 +17,8 @@ import BudgetView from './views/BudgetView';
 import ScheduleView from './views/ScheduleView';
 import ProgressView from './views/ProgressView';
 import PhotosView from './views/PhotosView';
-import ReportsView from './views/ReportsView';
+import MonthlyReportsView from './views/MonthlyReportsView';
+import MemoriasView from './views/MemoriasView';
 import ReportView from './views/ReportView';
 import ParcialesView from './views/ParcialesView';
 import CreateProjectView from './views/CreateProjectView';
@@ -29,7 +30,7 @@ import CostsView from './views/CostsView';
 import AgentConfigModal from './views/AgentConfigModal';
 import logo from './assets/logo.png';
 
-type ViewState = 'dashboard' | 'budget' | 'schedule' | 'progress' | 'photos' | 'reports' | 'parciales' | 'analytics' | 'create-project' | 'edit-project' | 'photo-reports' | 'correspondence' | 'costs';
+type ViewState = 'dashboard' | 'budget' | 'schedule' | 'progress' | 'photos' | 'reports' | 'parciales' | 'analytics' | 'create-project' | 'edit-project' | 'photo-reports' | 'correspondence' | 'costs' | 'monthly-reports';
 
 // Utilidad para convertir HEX a HSL (H S% L%)
 const hexToHSL = (hex: string): string => {
@@ -353,7 +354,8 @@ function App() {
       case 'schedule': return <ScheduleView />;
       case 'progress': return <ProgressView />;
       case 'photos': return <PhotosView />;
-      case 'reports': return <ReportsView />;
+      case 'reports': return <MemoriasView />;
+      case 'monthly-reports': return <MonthlyReportsView />;
       case 'parciales': return <ParcialesView />;
       case 'analytics': return <ReportView />;
       case 'create-project': return <CreateProjectView onProjectCreated={() => setCurrentView('dashboard')} />;
@@ -892,6 +894,13 @@ function App() {
               >
                 <Folder size={20} />
                 <span>Informes Fotográficos</span>
+              </div>
+              <div
+                className={`nav-item ${currentView === 'monthly-reports' ? 'active' : ''}`}
+                onClick={() => setCurrentView('monthly-reports')}
+              >
+                <FileText size={20} />
+                <span>Informes Mensuales</span>
               </div>
               <div
                 className={`nav-item ${currentView === 'correspondence' ? 'active' : ''}`}

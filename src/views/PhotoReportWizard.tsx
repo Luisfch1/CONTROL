@@ -38,14 +38,24 @@ const LocalImage = ({ photo, getPhotoLocalUrl, style, className, onLoad }: any) 
   }, [url]);
 
   useEffect(() => {
-    if (!photo.isLocal || url || !inView) return;
+    if (!photo.isLocal) {
+      setUrl(photo.imageUrl || null);
+      return;
+    }
+    if (url || !inView) return;
 
     let active = true;
     getPhotoLocalUrl(photo.id).then((blobUrl: string | null) => {
-      if (active && blobUrl) setUrl(blobUrl);
+      if (active) {
+        if (blobUrl) {
+          setUrl(blobUrl);
+        } else if (photo.imageUrl) {
+          setUrl(photo.imageUrl);
+        }
+      }
     });
     return () => { active = false; };
-  }, [photo.id, photo.isLocal, getPhotoLocalUrl, url, inView]);
+  }, [photo.id, photo.isLocal, getPhotoLocalUrl, url, inView, photo.imageUrl]);
 
   return (
     <div ref={ref} style={{ width: '100%', height: '100%' }}>

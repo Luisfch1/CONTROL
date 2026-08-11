@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
+const { ImapFlow } = require('imapflow');
 const isDev = !app.isPackaged;
 
 function getLocalIPs() {
@@ -147,6 +148,152 @@ ipcMain.handle('delete-apu-file', async (event, projectId, fileName) => {
   }
 });
 
+// Helpers y manejadores para almacenamiento de Habilidades (Skills) en la carpeta del usuario
+const DEFAULT_SKILLS = {
+  generate_executive_report: `# Habilidad: Generación de Informe Ejecutivo (generate_executive_report)
+
+Esta habilidad permite al Agente IA consolidar un informe ejecutivo detallado a una fecha de corte específica. El informe incluye el análisis del estado del proyecto, resumen de avance físico y financiero, AIU, curvas S de progreso en formato gráfico y el seguimiento detallado de actividades atrasadas.
+
+## Reglas de Trabajo e Instrucciones
+
+1. **Formato Único de Exportación (CRÍTICO):**
+   - Los informes ejecutivos de estado de obra se generarán **EXCLUSIVAMENTE en formato Microsoft Word** (\`format: \"word\"\`).
+   - Queda prohibido generarlo en formato Excel o cualquier otro formato a menos que el usuario lo solicite explícitamente por chat.
+
+2. **Título del Informe:**
+   - Debe encabezarse estrictamente como: \`INFORME EJECUTIVO A CORTE DE LA FECHA [FECHA_DE_CORTE]\` de acuerdo a la fecha indicada por el usuario (o la fecha del último avance si no se especifica).
+
+3. **Ubicación y Consulta de Datos del Proyecto (Obligatorio):**
+   - Para realizar el análisis de obra y generar el reporte, debes leer y basarte en las siguientes bases de datos inyectadas en tu instrucción de sistema:
+     - **Presupuesto y Programación:** Consulta la sección \`ESTRUCTURA COMPLETA DEL PRESUPUESTO Y CRONOGRAMA\` para conocer todos los códigos de ítems, descripciones, unidades, cantidades y fechas contractuales programadas (Inicio y Fin).
+     - **Avance Físico Ejecutado:** Consulta la sección \`HISTÓRICO DE REPORTES DE PROGRESO DE OBRA\`. Busca el reporte de progreso más reciente (por fecha de corte) para extraer las cantidades acumuladas ejecutadas reales de cada actividad (\`accumulatedQuantity\`).
+     - **Avance Financiero (Actas):** Consulta la sección \`HISTÓRICO DE ACTAS DE COBRO / REPORTES PARCIALES\` para evaluar el valor acumulado cobrado al cliente.
+     - **Porcentajes de AIU:** Consulta la sección \`INFORMACIÓN COMPLETA DEL PROYECTO ACTIVO\` para obtener los porcentajes de Administración, Imprevistos y Utilidad configurados para el proyecto.
+
+4. **Instrucciones de Ejecución de la Herramienta (export_report_data):**
+   - Debes llamar obligatoriamente a la herramienta \`export_report_data\`.
+   - **Parámetro format:** Debe ser estrictamente \`\"word\"\`.
+   - **Parámetro title:** Debe contener estrictamente la frase \`\"Informe Ejecutivo de Estado de Obra - [Nombre del Proyecto]\"\`.
+   - **Parámetro summary:** Aquí debes escribir la redacción de tu análisis técnico (Resumen Ejecutivo) en prosa. Debes evaluar:
+     - El porcentaje real de ejecución física de la obra frente al programado teórico (indicando si el proyecto va adelantado o atrasado).
+     - Las causas técnicas de los atrasos si existen (cruzando los comentarios de las fotos o correspondencia).
+     - El estado financiero (actas de cobro vs. avance físico).
+     - Las recomendaciones de ingeniería para el contratista.
+   - **Parámetro tableData:** Pasa un arreglo vacío \`[]\`. El motor de exportación de Word de la aplicación interceptará el llamado y construirá de forma automática y completa:
+     - La tabla completa con **todos** los ítems del presupuesto contractual.
+     - Las cantidades ejecutadas acumuladas y el porcentaje de avance de cada actividad de acuerdo con la base de datos de la aplicación.
+     - Las sumatorias de Costo Directo, los cálculos de AIU y el Total General del contrato.
+     - Los **Gráficos de Curva S vectoriales** (Física y Financiera) de ancho completo.
+     - La tabla de **Seguimiento a la Programación** identificando de forma automática las actividades atrasadas frente al cronograma.`,
+
+  export_report_data: `# Habilidad: Exportación Tabular de Reportes (export_report_data)
+
+Esta habilidad permite al Agente IA generar y exportar reportes de interventoría física y financiera de las actividades del proyecto en formatos Word (.doc) y Excel (.xlsx).
+
+## Reglas de Trabajo e Instrucciones
+1. **Consistencia de Datos:** Toda exportación tabular debe utilizar los datos del presupuesto activo y los reportes acumulados de avance físico y financiero.
+2. **Formato:** Los reportes de Excel deben presentar la estructura de capítulos y subcapítulos con su sangría y jerarquía visual.
+3. **Moneda:** Los valores financieros deben formatearse en pesos colombianos (COP).
+4. **Resumen de Avance:** Siempre debe incluirse una fila de totales generales del proyecto calculando el avance ponderado real vs. programado.`,
+
+  generate_photo_report: `# Habilidad: Generación de Informes Fotográficos (generate_photo_report)
+
+Esta habilidad permite filtrar, ordenar y exportar las fotos de avance de obra (evidencias de campo) a documentos de reporte Word (.doc) o a un archivo comprimido (.zip) con su respectiva información técnica.
+
+## Reglas de Trabajo e Instrucciones
+1. **Filtros de Fecha:** Si el usuario solicita un reporte de fotos para un período específico, se deben filtrar estrictamente los registros cuya fecha se encuentre en ese rango.
+2. **Asociación de Ítems:** Cada foto debe estar vinculada a su código de ítem presupuestal correspondiente (ej: 1.2.1). Si no tiene ítem, se categoriza como "General" o "S/N".
+3. **Ordenamiento:** Las fotos deben ordenarse cronológicamente de forma ascendente para mostrar el avance de la obra secuencialmente.
+4. **Nombres de Archivos:** Las imágenes deben nombrarse siguiendo el patrón \`fecha_item_fotoNumero.ext\` y acompañarse de un archivo \`.txt\` con su descripción para reportes comprimidos.`,
+
+  generate_progress_report: `# Habilidad: Registro e Informe de Avances (generate_progress_report)
+
+Esta habilidad permite calcular cantidades acumuladas de obra y generar reportes periódicos (semanales o mensuales) basados en las descripciones de avance técnico ingresadas por el usuario.
+
+## Reglas de Trabajo e Instrucciones
+1. **Cálculo de Acumulados:** La cantidad acumulada de una actividad es la suma de la cantidad del reporte anterior más la cantidad ejecutada en el período actual.
+2. **Límites de Cantidad:** La cantidad acumulada no debe exceder la cantidad total contratada/presupuestada a menos que exista un adicional aprobado.
+3. **Validación de Fechas:** Las fechas de los reportes de avance deben ser consecutivas y no solaparse con períodos anteriores.`,
+
+  add_todo: `# Habilidad: Gestión de Pendientes - Creación (add_todo)
+
+Esta habilidad permite al Agente IA detectar compromisos, tareas y pendientes pendientes durante el análisis o chat con el usuario, redactarlos de forma técnica y agregarlos al archivo físico \`PENDIENTES.md\`.
+
+## Reglas de Trabajo e Instrucciones
+1. **Redacción Técnica:** Las tareas deben ser claras, indicar el responsable si se conoce y usar verbos de acción (ej: "Verificar vaciado de losa", "Revisar correspondencia de interventoría").
+2. **Priorización:** Clasificar la tarea según su criticidad en el avance de la obra (Alta, Media, Baja).
+3. **Estructura en PENDIENTES.md:** Cada pendiente debe insertarse con formato de lista de verificación (\`- [ ]\`) bajo el capítulo del proyecto correspondiente.`,
+
+  delete_todo: `# Habilidad: Gestión de Pendientes - Cierre (delete_todo)
+
+Esta habilidad permite al Agente IA marcar tareas pendientes como completadas (\`- [x]\`) o eliminarlas físicamente de \`PENDIENTES.md\` una vez que el usuario confirme verbalmente su finalización.
+
+## Reglas de Trabajo e Instrucciones
+1. **Verificación Conversacional:** Antes de cerrar o eliminar una tarea, se debe comprobar que el usuario explícitamente confirme que el trabajo asociado ha sido terminado o descartado.
+2. **Preservar Historial:** Se prefiere marcar las tareas como completadas (\`[x]\`) en lugar de eliminarlas físicamente para mantener la trazabilidad, a menos que el usuario solicite borrarla.
+3. **Actualización:** Registrar la fecha de cierre de la tarea en la misma línea del pendiente.`,
+
+  generate_new_budget: `# Habilidad: Generar Nuevo Presupuesto (generate_new_budget)
+
+Esta habilidad permite al Agente IA analizar un archivo Excel cargado que contiene modificaciones del presupuesto (adicionales, variaciones de cantidades o precios) y estructurar un nuevo presupuesto o escenario comparativo.
+
+## Reglas de Trabajo e Instrucciones
+
+1. **Acción Principal (Crear Nueva Versión):**
+   - El agente debe tomar el presupuesto activo del proyecto como base (presupuesto anterior).
+   - Debe proponer la creación de un nuevo escenario o versión del presupuesto usando la herramienta o indicando los cambios para que se guarde como una nueva versión en la aplicación.
+
+2. **Comparación e Incorporación de Datos (Columnas a la Derecha):**
+   - El nuevo presupuesto debe mantener la estructura del presupuesto anterior, pero agregar columnas de comparación para el análisis técnico:
+     - **Presupuesto Anterior (LCH Base):** Cantidad, Precio Unitario, Valor Total.
+     - **Presupuesto Modificado (Nuevos datos):** Nuevas Cantidades, Nuevos Precios Unitarios, Nuevos Valores Totales.
+     - **Diferencia / Variación:** Variación de Cantidad, Variación de Precio, Desviación de Valor Total.
+   - Debe identificar claramente:
+     - **Ítems Adicionales:** Nuevas actividades que no existían en el presupuesto contractual anterior.
+     - **Ítems con Aumento/Disminución de Cantidad:** Actividades con variación en volumen de obra.
+     - **Ítems con Variación de Precio:** Actividades con costos unitarios diferentes.
+
+3. **Cálculo y Presentación Visual:**
+   - Realizar las sumas de costo directo para ambos escenarios (anterior y modificado), calcular el AIU correspondiente y contrastar el valor total de contrato resultante.
+   - Presentar el reporte comparativo en formato de tabla Markdown limpia siguiendo la paleta de colores de LCH Ingeniería (texto negro, títulos gris oscuro, cabeceras gris claro, sin amarillos/dorados).`
+};
+
+const getSkillsDir = (projectId) => {
+  const dir = path.join(os.homedir(), 'Documents', 'CONTROL_Skills', projectId);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+};
+
+ipcMain.handle('read-skill-file', async (event, projectId, skillName) => {
+  try {
+    const dir = getSkillsDir(projectId);
+    const filePath = path.join(dir, `${skillName}.md`);
+    if (fs.existsSync(filePath)) {
+      return fs.readFileSync(filePath, 'utf8');
+    }
+    const defaultContent = DEFAULT_SKILLS[skillName] || `# Habilidad: ${skillName}\n\nDescripción por defecto.`;
+    fs.writeFileSync(filePath, defaultContent, 'utf8');
+    return defaultContent;
+  } catch (error) {
+    console.error("Error reading/initializing skill file:", error);
+    return null;
+  }
+});
+
+ipcMain.handle('save-skill-file', async (event, projectId, skillName, content) => {
+  try {
+    const dir = getSkillsDir(projectId);
+    const filePath = path.join(dir, `${skillName}.md`);
+    fs.writeFileSync(filePath, content, 'utf8');
+    return true;
+  } catch (error) {
+    console.error("Error saving skill file:", error);
+    return false;
+  }
+});
+
 ipcMain.handle('start-sync-server', async (event) => {
   if (httpServer) {
     return { ips: getLocalIPs(), port: httpServer.address().port };
@@ -281,6 +428,203 @@ ipcMain.handle('save-lch-dialog', async (event, suggestedName, content) => {
   } catch (error) {
     console.error('Error saving .lch file:', error);
     return null;
+  }
+});
+
+// Handler para conectar a Gmail e importar correos por IMAP
+function countAttachments(node) {
+  if (!node) return 0;
+  let count = 0;
+  if (node.disposition === 'attachment') {
+    count = 1;
+  }
+  if (node.childNodes && Array.isArray(node.childNodes)) {
+    for (const child of node.childNodes) {
+      count += countAttachments(child);
+    }
+  }
+  return count;
+}
+
+ipcMain.handle('fetch-gmail-emails', async (event, { email, appPassword, dateFrom, dateTo }) => {
+  console.log(`[IMAP] Sincronizando Gmail para: ${email} en rango ${dateFrom} - ${dateTo}`);
+  const client = new ImapFlow({
+    host: 'imap.gmail.com',
+    port: 993,
+    secure: true,
+    auth: {
+      user: email,
+      pass: appPassword
+    },
+    logger: false
+  });
+
+  try {
+    try {
+      await client.connect();
+    } catch (connectErr) {
+      throw new Error(`Fallo de conexión o autenticación. Verifique que el correo de Gmail y la Contraseña de Aplicación de 16 caracteres sean correctos, y que la opción de acceso IMAP esté activa en la configuración de su cuenta de Gmail. (Detalle: ${connectErr.message})`);
+    }
+    const emails = [];
+
+    // 1. Buscar en Bandeja de Entrada (INBOX)
+    let lock;
+    try {
+      lock = await client.getMailboxLock('INBOX');
+    } catch (inboxErr) {
+      throw new Error(`Error al acceder a la bandeja de entrada (INBOX): ${inboxErr.message}`);
+    }
+    try {
+      const searchCriteria = {};
+      if (dateFrom) {
+        searchCriteria.since = new Date(dateFrom);
+      }
+      if (dateTo) {
+        const beforeDate = new Date(dateTo);
+        beforeDate.setDate(beforeDate.getDate() + 1);
+        searchCriteria.before = beforeDate;
+      }
+      if (!dateFrom && !dateTo) {
+        const oneMonthAgo = new Date();
+        oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+        searchCriteria.since = oneMonthAgo;
+      }
+
+      const inboxMessages = await client.search(searchCriteria);
+      console.log(`[IMAP] Encontrados ${inboxMessages.length} correos en INBOX`);
+
+      for (const seq of inboxMessages) {
+        try {
+          const msg = await client.fetchOne(seq, { envelope: true, bodyStructure: true });
+          if (msg && msg.envelope) {
+            const dateStr = msg.envelope.date ? msg.envelope.date.toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+            const dateTimeStr = msg.envelope.date ? msg.envelope.date.toISOString() : new Date().toISOString();
+            
+            const senderName = msg.envelope.from?.[0]?.name || '';
+            const senderAddr = msg.envelope.from?.[0]?.address || '';
+            const sender = senderName ? `${senderName} <${senderAddr}>` : senderAddr;
+
+            const receiverName = msg.envelope.to?.[0]?.name || '';
+            const receiverAddr = msg.envelope.to?.[0]?.address || '';
+            const receiver = receiverName ? `${receiverName} <${receiverAddr}>` : receiverAddr;
+
+            const attachmentsCount = msg.bodyStructure ? countAttachments(msg.bodyStructure) : 0;
+
+            emails.push({
+              id: `gmail-in-${msg.uid || seq}-${msg.envelope.messageId ? msg.envelope.messageId.replace(/[^a-zA-Z0-9]/g, '') : Date.now()}`,
+              date: dateStr,
+              dateTime: dateTimeStr,
+              direction: 'inbound',
+              sender: sender || 'Desconocido',
+              receiver: receiver || email,
+              subject: msg.envelope.subject || 'Sin Asunto',
+              bodySnippet: '',
+              category: 'general',
+              attachmentsCount: attachmentsCount
+            });
+          }
+        } catch (fetchErr) {
+          console.error(`[IMAP] Error fetching INBOX message seq ${seq}:`, fetchErr);
+        }
+      }
+    } finally {
+      lock.release();
+    }
+
+    // 2. Buscar en Bandeja de Enviados
+    const list = await client.list();
+    let sentMailboxName = null;
+    for (const box of list) {
+      const boxPath = box.path || box.name;
+      if (!boxPath) continue;
+      const pathLower = boxPath.toLowerCase();
+      if (box.specialUse === '\\Sent' || pathLower.includes('enviados') || pathLower.includes('sent')) {
+        sentMailboxName = boxPath;
+        break;
+      }
+    }
+
+    if (sentMailboxName) {
+      console.log(`[IMAP] Accediendo a la bandeja de enviados: "${sentMailboxName}"`);
+      let sentLock;
+      try {
+        sentLock = await client.getMailboxLock(sentMailboxName);
+      } catch (sentErr) {
+        throw new Error(`Error al acceder a la bandeja de enviados (${sentMailboxName}): ${sentErr.message}`);
+      }
+      try {
+        const searchCriteria = {};
+        if (dateFrom) {
+          searchCriteria.since = new Date(dateFrom);
+        }
+        if (dateTo) {
+          const beforeDate = new Date(dateTo);
+          beforeDate.setDate(beforeDate.getDate() + 1);
+          searchCriteria.before = beforeDate;
+        }
+        if (!dateFrom && !dateTo) {
+          const oneMonthAgo = new Date();
+          oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+          searchCriteria.since = oneMonthAgo;
+        }
+
+        const sentMessages = await client.search(searchCriteria);
+        console.log(`[IMAP] Encontrados ${sentMessages.length} correos en Enviados`);
+
+        for (const seq of sentMessages) {
+          try {
+            const msg = await client.fetchOne(seq, { envelope: true, bodyStructure: true });
+            if (msg && msg.envelope) {
+              const dateStr = msg.envelope.date ? msg.envelope.date.toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+              const dateTimeStr = msg.envelope.date ? msg.envelope.date.toISOString() : new Date().toISOString();
+
+              const senderName = msg.envelope.from?.[0]?.name || '';
+              const senderAddr = msg.envelope.from?.[0]?.address || '';
+              const sender = senderName ? `${senderName} <${senderAddr}>` : senderAddr;
+
+              const receiverName = msg.envelope.to?.[0]?.name || '';
+              const receiverAddr = msg.envelope.to?.[0]?.address || '';
+              const receiver = receiverName ? `${receiverName} <${receiverAddr}>` : receiverAddr;
+
+              const attachmentsCount = msg.bodyStructure ? countAttachments(msg.bodyStructure) : 0;
+
+              emails.push({
+                id: `gmail-out-${msg.uid || seq}-${msg.envelope.messageId ? msg.envelope.messageId.replace(/[^a-zA-Z0-9]/g, '') : Date.now()}`,
+                date: dateStr,
+                dateTime: dateTimeStr,
+                direction: 'outbound',
+                sender: sender || email,
+                receiver: receiver || 'Desconocido',
+                subject: msg.envelope.subject || 'Sin Asunto',
+                bodySnippet: '',
+                category: 'general',
+                attachmentsCount: attachmentsCount
+              });
+            }
+          } catch (fetchErr) {
+            console.error(`[IMAP] Error fetching Sent message seq ${seq}:`, fetchErr);
+          }
+        }
+      } finally {
+        sentLock.release();
+      }
+    } else {
+      console.warn("[IMAP] No se pudo encontrar una bandeja con atributo de Enviados.");
+    }
+
+    await client.logout();
+
+    // Ordenar correos cronológicamente descendente
+    emails.sort((a, b) => b.dateTime.localeCompare(a.dateTime));
+
+    return { success: true, emails };
+
+  } catch (err) {
+    console.error("[IMAP] Error general durante la sincronización:", err);
+    try {
+      await client.logout();
+    } catch (_) {}
+    return { success: false, error: err.message || String(err) };
   }
 });
 

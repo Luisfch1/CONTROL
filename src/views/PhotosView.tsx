@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { useProjects } from '../context/ProjectsContext';
 import { useAgent } from '../context/AgentContext';
+import { photoDB } from '../services/PhotoDatabase';
 import PhotoReportWizard from './PhotoReportWizard';
 import './Dashboard.css';
 
@@ -19,11 +20,19 @@ const LocalImage = ({ photo, getPhotoLocalUrl, className, style, onLoad }: any) 
     let active = true;
     if (photo.isLocal) {
       getPhotoLocalUrl(photo.id).then((blobUrl: string | null) => {
-        if (active && blobUrl) setUrl(blobUrl);
+        if (active) {
+          if (blobUrl) {
+            setUrl(blobUrl);
+          } else if (photo.imageUrl) {
+            setUrl(photo.imageUrl);
+          }
+        }
       });
+    } else {
+      setUrl(photo.imageUrl || null);
     }
     return () => { active = false; };
-  }, [photo.id, photo.isLocal, getPhotoLocalUrl]);
+  }, [photo.id, photo.isLocal, getPhotoLocalUrl, photo.imageUrl]);
 
   return url ? <img src={url} alt={photo.description} className={className} style={style} onLoad={onLoad} loading="lazy" /> : null;
 };
@@ -31,7 +40,7 @@ const LocalImage = ({ photo, getPhotoLocalUrl, className, style, onLoad }: any) 
 export default function PhotosView() {
   const { 
     getActiveProject, removeLogiEntry, removeLogiEntries, 
-    acceptAiProposal, rejectAiProposal, importLocalPhotosBackup, getPhotoLocalUrl,
+    acceptAiProposal, rejectAiProposal, importLocalPhotosBackup, exportLocalPhotosBackup, getPhotoLocalUrl,
     selectedPhotoId, setSelectedPhotoId, updateLogiEntry, updateLogiEntries
   } = useProjects();
   const { generatePhotoProposals } = useAgent();
@@ -164,27 +173,64 @@ export default function PhotosView() {
 
   const handleDownload = async (photo: any) => {
     try {
-      let url = photo.imageUrl;
+      let blob: Blob | null = null;
+      let extension = 'jpg';
+
       if (photo.isLocal) {
-        url = await getPhotoLocalUrl(photo.id);
+        // Obtener base64 de la base de datos de fotos local
+        const base64 = await photoDB.getPhoto(photo.id);
+        if (base64) {
+          let mime = 'image/jpeg';
+          let b64Data = base64;
+          if (base64.startsWith('data:')) {
+            const parts = base64.split(',');
+            mime = parts[0].split(':')[1].split(';')[0];
+            b64Data = parts[1];
+          }
+          const byteCharacters = atob(b64Data);
+          const byteArrays = [];
+          for (let offset = 0; offset < byteCharacters.length; offset += 512) {
+            const slice = byteCharacters.slice(offset, offset + 512);
+            const byteNumbers = new Array(slice.length);
+            for (let i = 0; i < slice.length; i++) {
+              byteNumbers[i] = slice.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            byteArrays.push(byteArray);
+          }
+          blob = new Blob(byteArrays, { type: mime });
+        }
+      } else if (photo.imageUrl) {
+        const response = await fetch(photo.imageUrl);
+        blob = await response.blob();
       }
-      if (!url) {
-        alert("⚠️ No se pudo obtener la imagen local.");
+
+      if (!blob) {
+        alert("⚠️ No se pudo obtener la imagen.");
         return;
       }
-      const response = await fetch(url);
-      const blob = await response.blob();
+
+      // Detectar extensión correcta según el tipo MIME del blob
+      const contentType = blob.type || '';
+      if (contentType.includes('png')) {
+        extension = 'png';
+      } else if (contentType.includes('webp')) {
+        extension = 'webp';
+      } else if (contentType.includes('gif')) {
+        extension = 'gif';
+      } else {
+        extension = 'jpg';
+      }
+
       const blobUrl = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = blobUrl;
-      link.download = `EVIDENCIA_${photo.itemCode}_${new Date().getTime()}.jpg`;
+      const cleanItemCode = (photo.itemCode || 'General').replace(/[^a-zA-Z0-9_\-]/g, '_');
+      link.download = `EVIDENCIA_${cleanItemCode}_${new Date().getTime()}.${extension}`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       window.URL.revokeObjectURL(blobUrl);
-      if (photo.isLocal) {
-        window.URL.revokeObjectURL(url);
-      }
     } catch (err) {
       console.error("Download failed", err);
       if (photo.imageUrl) {
@@ -342,9 +388,17 @@ export default function PhotosView() {
             className="btn btn-secondary" 
             onClick={() => importLocalPhotosBackup(project.id)}
             style={{ fontWeight: '700', background: 'hsl(var(--bg-tertiary))', border: '1px solid var(--border-color)' }}
-            title="Enlazar archivo local .lchp"
+            title="Cargar archivo local .lchp con fotos y datos"
           >
             <Folder size={16} /> CARGAR .LCHP
+          </button>
+          <button 
+            className="btn btn-secondary" 
+            onClick={() => exportLocalPhotosBackup(project.id)}
+            style={{ fontWeight: '700', background: 'hsl(var(--bg-tertiary))', border: '1px solid var(--border-color)' }}
+            title="Exportar copia de respaldo consolidada .lchp"
+          >
+            <Download size={16} /> EXPORTAR .LCHP
           </button>
         </div>
       </div>

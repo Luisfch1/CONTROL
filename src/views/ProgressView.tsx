@@ -1,14 +1,21 @@
 import { useState, useRef, useMemo } from 'react';
 import { useProjects } from '../context/ProjectsContext';
-import { ChevronLeft, Plus, Calendar, Trash2, Download, X } from 'lucide-react';
+import { ChevronLeft, Plus, Calendar, Trash2, Download, Upload, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { exportToExcel } from '../utils/excelExport';
+import { parseRobustNumber } from '../utils/mathUtils';
+
+const normalizeHeader = (val: any): string => {
+  if (val === null || val === undefined) return '';
+  return String(val).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+};
 
 export default function ProgressView() {
   const { 
     getActiveProject, 
     addProgressReport, 
     updateProgressEntry, 
+    importProgressEntries,
     removeProgressReport,
     columnWidths,
     updateColumnWidth,
@@ -28,9 +35,18 @@ export default function ProgressView() {
   const [isCreatingReport, setIsCreatingReport] = useState(false);
   const [newReportDate, setNewReportDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [newReportName, setNewReportName] = useState('');
+  const [pendingExcelImportData, setPendingExcelImportData] = useState<{ entries: { itemCode: string; accumulatedQuantity: number }[] } | null>(null);
+  const newReportExcelInputRef = useRef<HTMLInputElement>(null);
 
   const colWidths = columnWidths.progress;
-  const getColWidth = (key: string) => collapsedColumns.progress.includes(key) ? 30 : colWidths[key];
+  const getColWidth = (key: string) => {
+    if (collapsedColumns.progress.includes(key)) return 30;
+    const width = colWidths[key] || 100;
+    if (key === 'exec') {
+      return Math.max(width, 180);
+    }
+    return width;
+  };
   const isCollapsed = (key: string) => collapsedColumns.progress.includes(key);
 
   // --- COLUMN RESIZING LOGIC (NOW PERSISTENT) ---
@@ -86,7 +102,7 @@ export default function ProgressView() {
   };
 
   const totalTableWidth = Object.keys(colWidths).reduce((acc, key) => {
-    return acc + (isCollapsed(key) ? 30 : colWidths[key]);
+    return acc + getColWidth(key);
   }, 0);
 
   if (!project) {
@@ -106,9 +122,166 @@ export default function ProgressView() {
       alert("Por favor, ingrese un nombre para el reporte.");
       return;
     }
-    addProgressReport(project.id, newReportDate, newReportName);
+    const reportId = crypto.randomUUID();
+    addProgressReport(project.id, newReportDate, newReportName, reportId);
+
+    if (pendingExcelImportData) {
+      importProgressEntries(project.id, reportId, pendingExcelImportData.entries);
+      setPendingExcelImportData(null);
+    }
+
     setIsCreatingReport(false);
     setNewReportName('');
+
+    setTimeout(() => {
+      const updated = getActiveProject();
+      if (updated && (window as any).electronAPI?.saveProject) {
+        (window as any).electronAPI.saveProject(updated).catch(console.error);
+      }
+    }, 150);
+  };
+
+  const handleDownloadProgressTemplate = () => {
+    if (!project) return;
+    const lastReport = reports.length > 0 ? reports[reports.length - 1] : null;
+
+    const templateData = budgetItems.map(item => {
+      const prevEntry = lastReport?.entries.find(e => e.itemCode === item.item);
+      const previousQty = prevEntry?.accumulatedQuantity || 0;
+
+      return {
+        'Ítem': item.item,
+        'Descripción': item.descripcion,
+        'Cant. Presupuesto': item.type === 'item' ? item.cantidad : '',
+        'Vr. Unitario': item.type === 'item' ? item.vlrUnitario : '',
+        'Vr. Total': item.type === 'item' ? item.vlrTotal : '',
+        'Cant. Anterior': item.type === 'item' ? previousQty : '',
+        'Cant. Actual (Llenar aquí)': '',
+        'Cant. Acumulada (Opcional)': ''
+      };
+    });
+
+    exportToExcel(templateData, `Plantilla_Avance_${project.name.replace(/\s+/g, '_')}`, 'Avance_Plantilla');
+  };
+
+  const handleNewReportExcelImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !project) return;
+
+    try {
+      const { read, utils } = await import('xlsx');
+      const data = await file.arrayBuffer();
+      const workbook = read(data);
+
+      const sheetName = workbook.SheetNames.includes('Avance') ? 'Avance' : workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const rows = utils.sheet_to_json<any[]>(worksheet, { header: 1 });
+
+      let headerRowIdx = -1;
+      for (let i = 0; i < Math.min(20, rows.length); i++) {
+        const row = rows[i];
+        if (row && row.some(cell => normalizeHeader(cell).includes('ITEM'))) {
+          headerRowIdx = i;
+          break;
+        }
+      }
+
+      if (headerRowIdx === -1) {
+        alert("No se pudo encontrar la fila de encabezados en el archivo Excel. Asegúrate de tener una columna llamada 'Ítem'.");
+        if (newReportExcelInputRef.current) newReportExcelInputRef.current.value = '';
+        return;
+      }
+
+      const headerRow = rows[headerRowIdx];
+      let itemColIdx = -1;
+      let acumColIdx = -1;
+      let actColIdx = -1;
+
+      for (let j = 0; j < headerRow.length; j++) {
+        const cellNormalized = normalizeHeader(headerRow[j]);
+        if (cellNormalized === 'ITEM' || cellNormalized === 'ITEM') {
+          itemColIdx = j;
+        } else if (cellNormalized.includes('ITEM') && itemColIdx === -1) {
+          itemColIdx = j;
+        } else if (cellNormalized.includes('ACUMULADA') || cellNormalized.includes('ACUMULADO') || cellNormalized === 'ACUM' || cellNormalized === 'ACUM.') {
+          acumColIdx = j;
+        } else if (cellNormalized.includes('ACTUAL') || cellNormalized === 'ACT' || cellNormalized === 'ACT.') {
+          actColIdx = j;
+        }
+      }
+
+      if (itemColIdx === -1) {
+        alert("No se encontró la columna de código de 'Ítem' en el archivo Excel.");
+        if (newReportExcelInputRef.current) newReportExcelInputRef.current.value = '';
+        return;
+      }
+
+      if (acumColIdx === -1 && actColIdx === -1) {
+        alert("No se encontró la columna de 'Cant. Acumulada' o 'Cant. Actual' en el archivo Excel.");
+        if (newReportExcelInputRef.current) newReportExcelInputRef.current.value = '';
+        return;
+      }
+
+      const budgetItemCodes = new Set(budgetItems.filter(i => i.type === 'item').map(i => String(i.item).trim()));
+      const mismatchedItems: string[] = [];
+      const parsedEntries: { itemCode: string; accumulatedQuantity: number }[] = [];
+      
+      const lastReport = reports.length > 0 ? reports[reports.length - 1] : null;
+
+      for (let i = headerRowIdx + 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row || row.length === 0) continue;
+
+        const itemCode = String(row[itemColIdx] || '').trim();
+        if (!itemCode || itemCode === '0' || itemCode === '#N/A') continue;
+
+        if (!budgetItemCodes.has(itemCode)) {
+          const isBudgetTitle = budgetItems.some(bi => bi.item === itemCode && bi.type !== 'item');
+          if (!isBudgetTitle) {
+            mismatchedItems.push(itemCode);
+          }
+          continue;
+        }
+
+        let newQty = 0;
+        if (acumColIdx !== -1) {
+          newQty = parseRobustNumber(row[acumColIdx]);
+        } else if (actColIdx !== -1) {
+          const prevEntry = lastReport?.entries.find(e => e.itemCode === itemCode);
+          const previousQty = prevEntry?.accumulatedQuantity || 0;
+          const actualQty = parseRobustNumber(row[actColIdx]);
+          newQty = previousQty + actualQty;
+        }
+
+        parsedEntries.push({
+          itemCode,
+          accumulatedQuantity: newQty
+        });
+      }
+
+      if (mismatchedItems.length > 0) {
+        const confirmMsg = `Los siguientes ítems del archivo Excel no existen en el presupuesto activo de la obra:\n\n${mismatchedItems.join(', ')}\n\n¿Desea omitir estos ítems y continuar con la importación del avance, o cancelar?`;
+        const proceed = window.confirm(confirmMsg);
+        if (!proceed) {
+          if (newReportExcelInputRef.current) newReportExcelInputRef.current.value = '';
+          return;
+        }
+      }
+
+      setPendingExcelImportData({ entries: parsedEntries });
+      
+      const fileNameClean = file.name.replace(/\.[^/.]+$/, "").replace(/Avance_/g, "").replace(/_/g, " ");
+      setNewReportName(fileNameClean);
+      setIsCreatingReport(true);
+
+    } catch (err) {
+      console.error("Error al importar Excel de avance nuevo:", err);
+      alert("Hubo un error al procesar el archivo Excel. Asegúrate de que tenga un formato válido.");
+    }
+
+    if (newReportExcelInputRef.current) {
+      newReportExcelInputRef.current.value = '';
+    }
   };
 
   const reports = project.progressReports || [];
@@ -160,13 +333,157 @@ export default function ProgressView() {
     exportToExcel(dataToExport, `Avance_${selectedReport.name.replace(/\s+/g, '_')}`, 'Avance');
   };
 
+  const progressExcelInputRef = useRef<HTMLInputElement>(null);
+
+  const handleImportProgressExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !project || !selectedReport) return;
+
+    try {
+      const { read, utils } = await import('xlsx');
+      const data = await file.arrayBuffer();
+      const workbook = read(data);
+
+      const sheetName = workbook.SheetNames.includes('Avance') ? 'Avance' : workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const rows = utils.sheet_to_json<any[]>(worksheet, { header: 1 });
+
+      let headerRowIdx = -1;
+      for (let i = 0; i < Math.min(20, rows.length); i++) {
+        const row = rows[i];
+        if (row && row.some(cell => normalizeHeader(cell).includes('ITEM'))) {
+          headerRowIdx = i;
+          break;
+        }
+      }
+
+      if (headerRowIdx === -1) {
+        alert("No se pudo encontrar la fila de encabezados en el archivo Excel. Asegúrate de tener una columna llamada 'Ítem'.");
+        if (progressExcelInputRef.current) progressExcelInputRef.current.value = '';
+        return;
+      }
+
+      const headerRow = rows[headerRowIdx];
+      let itemColIdx = -1;
+      let acumColIdx = -1;
+      let actColIdx = -1;
+
+      for (let j = 0; j < headerRow.length; j++) {
+        const cellNormalized = normalizeHeader(headerRow[j]);
+        if (cellNormalized === 'ITEM' || cellNormalized === 'ITEM') {
+          itemColIdx = j;
+        } else if (cellNormalized.includes('ITEM') && itemColIdx === -1) {
+          itemColIdx = j;
+        } else if (cellNormalized.includes('ACUMULADA') || cellNormalized.includes('ACUMULADO') || cellNormalized === 'ACUM' || cellNormalized === 'ACUM.') {
+          acumColIdx = j;
+        } else if (cellNormalized.includes('ACTUAL') || cellNormalized === 'ACT' || cellNormalized === 'ACT.') {
+          actColIdx = j;
+        }
+      }
+
+      if (itemColIdx === -1) {
+        alert("No se encontró la columna de código de 'Ítem' en el archivo Excel.");
+        if (progressExcelInputRef.current) progressExcelInputRef.current.value = '';
+        return;
+      }
+
+      if (acumColIdx === -1 && actColIdx === -1) {
+        alert("No se encontró la columna de 'Cant. Acumulada' o 'Cant. Actual' en el archivo Excel.");
+        if (progressExcelInputRef.current) progressExcelInputRef.current.value = '';
+        return;
+      }
+
+      const budgetItemCodes = new Set(budgetItems.filter(i => i.type === 'item').map(i => String(i.item).trim()));
+      const mismatchedItems: string[] = [];
+      const parsedEntries: { itemCode: string; accumulatedQuantity: number }[] = [];
+
+      for (let i = headerRowIdx + 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row || row.length === 0) continue;
+
+        const itemCode = String(row[itemColIdx] || '').trim();
+        if (!itemCode || itemCode === '0' || itemCode === '#N/A') continue;
+
+        // Comprobar si el ítem existe en el presupuesto
+        if (!budgetItemCodes.has(itemCode)) {
+          const isBudgetTitle = budgetItems.some(bi => bi.item === itemCode && bi.type !== 'item');
+          if (!isBudgetTitle) {
+            mismatchedItems.push(itemCode);
+          }
+          continue;
+        }
+
+        let newQty = 0;
+        if (acumColIdx !== -1) {
+          newQty = parseRobustNumber(row[acumColIdx]);
+        } else if (actColIdx !== -1) {
+          const prevEntry = previousReport?.entries.find(e => e.itemCode === itemCode);
+          const previousQty = prevEntry?.accumulatedQuantity || 0;
+          const actualQty = parseRobustNumber(row[actColIdx]);
+          newQty = previousQty + actualQty;
+        }
+
+        parsedEntries.push({
+          itemCode,
+          accumulatedQuantity: newQty
+        });
+      }
+
+      if (mismatchedItems.length > 0) {
+        const confirmMsg = `Los siguientes ítems del archivo Excel no existen en el presupuesto activo de la obra:\n\n${mismatchedItems.join(', ')}\n\n¿Desea omitir estos ítems y continuar con la importación del avance, o cancelar?`;
+        const proceed = window.confirm(confirmMsg);
+        if (!proceed) {
+          if (progressExcelInputRef.current) progressExcelInputRef.current.value = '';
+          return;
+        }
+      }
+
+      importProgressEntries(project.id, selectedReport.id, parsedEntries);
+
+      setTimeout(() => {
+        const updatedProject = getActiveProject();
+        if (updatedProject && (window as any).electronAPI?.saveProject) {
+          (window as any).electronAPI.saveProject(updatedProject)
+            .then(() => console.log("[Excel Progress Import] Guardado físico automático exitoso."))
+            .catch(console.error);
+        }
+      }, 100);
+
+      alert(`Se importó el avance de obra correctamente. Se actualizaron ${parsedEntries.length} ítems.`);
+
+    } catch (err) {
+      console.error("Error al importar Excel de avance:", err);
+      alert("Hubo un error al procesar el archivo Excel de avance. Asegúrate de que tenga un formato válido.");
+    }
+
+    if (progressExcelInputRef.current) {
+      progressExcelInputRef.current.value = '';
+    }
+  };
+
   if (!selectedReport && !isCreatingReport) {
     return (
       <div>
         <div className="page-header">
           <h2 className="page-title">Avance de Obra</h2>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <button className="btn btn-primary btn-pulse" onClick={() => setIsCreatingReport(true)}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <input
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              style={{ display: 'none' }}
+              ref={newReportExcelInputRef}
+              onChange={handleNewReportExcelImport}
+            />
+            <button className="btn btn-secondary" onClick={handleDownloadProgressTemplate} style={{ display: 'flex', alignItems: 'center', gap: '8px' }} title="Descargar plantilla de avance con ítems activos">
+              <Download size={16} /> Plantilla Excel
+            </button>
+            <button className="btn btn-secondary" onClick={() => newReportExcelInputRef.current?.click()} style={{ display: 'flex', alignItems: 'center', gap: '8px' }} title="Subir reporte de avance nuevo desde Excel">
+              <Upload size={16} /> Importar Excel
+            </button>
+            <button className="btn btn-primary btn-pulse" onClick={() => {
+              setPendingExcelImportData(null);
+              setIsCreatingReport(true);
+            }}>
               <Plus size={16} /> Registrar Avance
             </button>
             <div style={{ width: '1px', height: '24px', background: 'var(--border-color)', margin: '0 8px', opacity: 0.3 }}></div>
@@ -382,6 +699,16 @@ export default function ProgressView() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 'var(--spacing-sm)' }}>
+          <input
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            style={{ display: 'none' }}
+            ref={progressExcelInputRef}
+            onChange={handleImportProgressExcel}
+          />
+          <button className="btn btn-secondary" onClick={() => progressExcelInputRef.current?.click()} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Upload size={16} /> Importar Excel
+          </button>
           <button className="btn btn-secondary" onClick={handleExportExcel} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Download size={16} /> Exportar Excel
           </button>
@@ -389,69 +716,72 @@ export default function ProgressView() {
       </div>
 
       <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden', padding: 0 }}>
-        {/* Cabezal de Doble Nivel (ADN Programación) */}
-        <div style={{ flexShrink: 0, overflow: 'hidden' }}>
-          {/* Nivel 1: Grupos */}
-          <div style={{ 
-            display: 'flex', height: '35px', alignItems: 'center', padding: '0 16px',
-            borderBottom: '1px solid hsl(var(--border-color) / 0.3)', fontWeight: 'bold', fontSize: '0.65rem',
-            color: 'hsl(var(--text-muted))', backgroundColor: 'hsla(var(--bg-tertiary), 0.4)',
-            backdropFilter: 'blur(10px)', width: '100%', minWidth: `${totalTableWidth}px`,
-            textTransform: 'uppercase', letterSpacing: '0.1em'
-          }}>
-            <div style={{ width: getColWidth('item') + getColWidth('descripcion') }}></div>
-            <div style={{ width: getColWidth('cant_p') + getColWidth('vr_unit') + getColWidth('vr_total'), textAlign: 'center', borderLeft: '1px solid hsl(var(--border-color) / 0.3)' }}>Presupuesto</div>
-            <div style={{ width: getColWidth('ant') + getColWidth('act') + getColWidth('acum') + getColWidth('saldo'), textAlign: 'center', borderLeft: '1px solid hsl(var(--border-color) / 0.3)' }}>Cantidades</div>
-            <div style={{ width: getColWidth('p_act') + getColWidth('p_cap') + getColWidth('p_cont') + getColWidth('p_total'), textAlign: 'center', borderLeft: '1px solid hsl(var(--border-color) / 0.3)' }}>Porcentajes de Avance</div>
-            <div style={{ width: getColWidth('exec'), borderLeft: '1px solid hsl(var(--border-color) / 0.3)' }}></div>
-          </div>
-          
-          {/* Nivel 2: Columnas Detalle */}
-          <div style={{ 
-            display: 'flex', height: '44px', alignItems: 'center', padding: '0 16px',
-            borderBottom: '1px solid hsl(var(--border-color))', fontWeight: 'bold', fontSize: '0.7rem',
-            color: 'hsl(var(--text-secondary))', backgroundColor: 'hsla(var(--bg-tertiary), 0.4)',
-            backdropFilter: 'blur(10px)', width: '100%', minWidth: `${totalTableWidth}px`,
-            textTransform: 'uppercase'
-          }}>
-            {[
-              { key: 'item', label: 'Ítem' },
-              { key: 'descripcion', label: 'Descripción' },
-              { key: 'cant_p', label: 'Cant.', align: 'center' },
-              { key: 'vr_unit', label: 'Vr. Unit', align: 'right' },
-              { key: 'vr_total', label: 'Vr. Total', align: 'right' },
-              { key: 'ant', label: 'Ant.', align: 'center' },
-              { key: 'act', label: 'Act.', align: 'center' },
-              { key: 'acum', label: 'Acum.', align: 'center' },
-              { key: 'saldo', label: 'Saldo', align: 'center' },
-              { key: 'p_act', label: '% Act.', align: 'center' },
-              { key: 'p_cap', label: '% Cap.', align: 'center' },
-              { key: 'p_cont', label: '% Cont.', align: 'center' },
-              { key: 'p_total', label: '% Total.', align: 'center' },
-              { key: 'exec', label: 'Vr. Ejecutado', align: 'right' }
-            ].map(col => {
-              const collapsed = isCollapsed(col.key);
-              const width = getColWidth(col.key);
-              return (
-                <div key={col.key} className="col-header-container" style={{ width: `${width}px`, textAlign: (col.align as any) || 'left' }}>
-                  {collapsed ? (
-                    <div className="collapsed-dot" onClick={() => toggleColumnCollapse('progress', col.key)} style={{ cursor: 'pointer' }}>•</div>
-                  ) : (
-                    <>
-                      {col.label}
-                      <button className="collapse-btn" onClick={() => toggleColumnCollapse('progress', col.key)} title="Colapsar columna" />
-                      <div className="col-resizer" onMouseDown={(e) => onMouseDown(col.key, e)} onDoubleClick={() => onDoubleClick(col.key)} />
-                    </>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        {/* Contenedor Principal (Desplazamiento Horizontal Sincronizado) */}
+        <div className="progress-scroll-container floating-scroll" style={{ flex: 1, overflowX: 'auto', overflowY: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ width: '100%', minWidth: `${totalTableWidth + 32}px`, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+            {/* Cabezal de Doble Nivel (ADN Programación) */}
+            <div style={{ flexShrink: 0 }}>
+              {/* Nivel 1: Grupos */}
+              <div style={{ 
+                display: 'flex', height: '35px', alignItems: 'center', padding: '0 16px',
+                borderBottom: '1px solid hsl(var(--border-color) / 0.3)', fontWeight: 'bold', fontSize: '0.65rem',
+                color: 'hsl(var(--text-muted))', backgroundColor: 'hsla(var(--bg-tertiary), 0.4)',
+                backdropFilter: 'blur(10px)', width: '100%',
+                textTransform: 'uppercase', letterSpacing: '0.1em'
+              }}>
+                <div style={{ width: getColWidth('item') + getColWidth('descripcion') }}></div>
+                <div style={{ width: getColWidth('cant_p') + getColWidth('vr_unit') + getColWidth('vr_total'), textAlign: 'center', borderLeft: '1px solid hsl(var(--border-color) / 0.3)' }}>Presupuesto</div>
+                <div style={{ width: getColWidth('ant') + getColWidth('act') + getColWidth('acum') + getColWidth('saldo'), textAlign: 'center', borderLeft: '1px solid hsl(var(--border-color) / 0.3)' }}>Cantidades</div>
+                <div style={{ width: getColWidth('p_act') + getColWidth('p_cap') + getColWidth('p_cont') + getColWidth('p_total'), textAlign: 'center', borderLeft: '1px solid hsl(var(--border-color) / 0.3)' }}>Porcentajes de Avance</div>
+                <div style={{ width: getColWidth('exec'), borderLeft: '1px solid hsl(var(--border-color) / 0.3)' }}></div>
+              </div>
+              
+              {/* Nivel 2: Columnas Detalle */}
+              <div style={{ 
+                display: 'flex', height: '44px', alignItems: 'center', padding: '0 16px',
+                borderBottom: '1px solid hsl(var(--border-color))', fontWeight: 'bold', fontSize: '0.7rem',
+                color: 'hsl(var(--text-secondary))', backgroundColor: 'hsla(var(--bg-tertiary), 0.4)',
+                backdropFilter: 'blur(10px)', width: '100%',
+                textTransform: 'uppercase'
+              }}>
+                {[
+                  { key: 'item', label: 'Ítem' },
+                  { key: 'descripcion', label: 'Descripción' },
+                  { key: 'cant_p', label: 'Cant.', align: 'center' },
+                  { key: 'vr_unit', label: 'Vr. Unit', align: 'right' },
+                  { key: 'vr_total', label: 'Vr. Total', align: 'right' },
+                  { key: 'ant', label: 'Ant.', align: 'center' },
+                  { key: 'act', label: 'Act.', align: 'center' },
+                  { key: 'acum', label: 'Acum.', align: 'center' },
+                  { key: 'saldo', label: 'Saldo', align: 'center' },
+                  { key: 'p_act', label: '% Act.', align: 'center' },
+                  { key: 'p_cap', label: '% Cap.', align: 'center' },
+                  { key: 'p_cont', label: '% Cont.', align: 'center' },
+                  { key: 'p_total', label: '% Total.', align: 'center' },
+                  { key: 'exec', label: 'Vr. Ejecutado', align: 'right' }
+                ].map(col => {
+                  const collapsed = isCollapsed(col.key);
+                  const width = getColWidth(col.key);
+                  return (
+                    <div key={col.key} className="col-header-container" style={{ width: `${width}px`, textAlign: (col.align as any) || 'left' }}>
+                      {collapsed ? (
+                        <div className="collapsed-dot" onClick={() => toggleColumnCollapse('progress', col.key)} style={{ cursor: 'pointer' }}>•</div>
+                      ) : (
+                        <>
+                          {col.label}
+                          <button className="collapse-btn" onClick={() => toggleColumnCollapse('progress', col.key)} title="Colapsar columna" />
+                          <div className="col-resizer" onMouseDown={(e) => onMouseDown(col.key, e)} onDoubleClick={() => onDoubleClick(col.key)} />
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
 
-        {/* Zona de Scroll */}
-        <div className="floating-scroll" style={{ flex: 1 }}>
-          <div style={{ width: '100%', minWidth: `${totalTableWidth}px` }}>
+            {/* Zona de Scroll (Vertical) */}
+            <div className="floating-scroll" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+              <div style={{ width: '100%' }}>
             {(() => {
               const rows: any[] = [];
               let currentChapterPrefix = '';
@@ -594,31 +924,31 @@ export default function ProgressView() {
               const totalProgressPercentage = (grandExecutedTotal / directCostTotal) * 100;
 
               rows.push(
-                <div key="final-totals" style={{ display: 'flex', alignItems: 'center', height: '35px', padding: '0 16px', backgroundColor: 'hsla(var(--bg-tertiary), 0.4)', borderBottom: '1px solid hsl(var(--border-color))', fontWeight: 'bold', fontSize: '0.8rem' }}>
-                  <div style={{ width: getColWidth('item') + getColWidth('descripcion') + getColWidth('cant_p') + getColWidth('vr_unit'), textAlign: 'right', paddingRight: '12px', color: 'hsl(var(--text-muted))' }}>TOTAL COSTO DIRECTO</div>
-                  <div style={{ width: getColWidth('vr_total'), textAlign: 'right', paddingRight: '4px' }}>{formatCurrency(directCostTotal)}</div>
-                  <div style={{ width: getColWidth('ant') + getColWidth('act') + getColWidth('acum') + getColWidth('saldo') + getColWidth('p_act') + getColWidth('p_cap') + getColWidth('p_cont') + getColWidth('p_total') }}></div>
-                  <div style={{ width: getColWidth('exec'), textAlign: 'right', paddingRight: '4px', color: 'hsl(var(--success))', whiteSpace: 'nowrap' }}>
+                <div key="final-totals" style={{ display: 'flex', alignItems: 'center', height: '35px', padding: '0 16px', backgroundColor: 'hsla(var(--bg-tertiary), 0.4)', borderBottom: '1px solid hsl(var(--border-color))', fontWeight: 'bold', fontSize: '0.8rem', width: '100%', minWidth: 'max-content' }}>
+                  <div style={{ width: getColWidth('item') + getColWidth('descripcion') + getColWidth('cant_p') + getColWidth('vr_unit'), textAlign: 'right', paddingRight: '12px', color: 'hsl(var(--text-muted))', flexShrink: 0 }}>TOTAL COSTO DIRECTO</div>
+                  <div style={{ width: getColWidth('vr_total'), textAlign: 'right', paddingRight: '4px', flexShrink: 0 }}>{formatCurrency(directCostTotal)}</div>
+                  <div style={{ width: getColWidth('ant') + getColWidth('act') + getColWidth('acum') + getColWidth('saldo') + getColWidth('p_act') + getColWidth('p_cap') + getColWidth('p_cont') + getColWidth('p_total'), flexShrink: 0 }}></div>
+                  <div style={{ width: getColWidth('exec'), textAlign: 'right', paddingRight: '4px', color: 'hsl(var(--success))', whiteSpace: 'nowrap', flexShrink: 0 }}>
                     {formatCurrency(grandExecutedTotal)} <span style={{ fontSize: '0.65rem', opacity: 0.8 }}>({totalProgressPercentage.toFixed(2)}%)</span>
                   </div>
                 </div>
               );
 
               rows.push(
-                <div key="final-aiu" style={{ display: 'flex', alignItems: 'center', height: '35px', padding: '0 16px', backgroundColor: 'hsla(var(--bg-tertiary), 0.2)', borderBottom: '1px solid hsl(var(--border-color))', fontWeight: 'bold', fontSize: '0.8rem' }}>
-                  <div style={{ width: getColWidth('item') + getColWidth('descripcion') + getColWidth('cant_p') + getColWidth('vr_unit'), textAlign: 'right', paddingRight: '12px' }}>A.I.U. ({aiuPercentage}%)</div>
-                  <div style={{ width: getColWidth('vr_total'), textAlign: 'right', paddingRight: '4px' }}>{formatCurrency(directCostTotal * (aiuPercentage/100))}</div>
-                  <div style={{ width: getColWidth('ant') + getColWidth('act') + getColWidth('acum') + getColWidth('saldo') + getColWidth('p_act') + getColWidth('p_cap') + getColWidth('p_cont') + getColWidth('p_total') }}></div>
-                  <div style={{ width: getColWidth('exec'), textAlign: 'right', paddingRight: '4px' }}>{formatCurrency(grandExecutedTotal * (aiuPercentage/100))}</div>
+                <div key="final-aiu" style={{ display: 'flex', alignItems: 'center', height: '35px', padding: '0 16px', backgroundColor: 'hsla(var(--bg-tertiary), 0.2)', borderBottom: '1px solid hsl(var(--border-color))', fontWeight: 'bold', fontSize: '0.8rem', width: '100%', minWidth: 'max-content' }}>
+                  <div style={{ width: getColWidth('item') + getColWidth('descripcion') + getColWidth('cant_p') + getColWidth('vr_unit'), textAlign: 'right', paddingRight: '12px', flexShrink: 0 }}>A.I.U. ({aiuPercentage}%)</div>
+                  <div style={{ width: getColWidth('vr_total'), textAlign: 'right', paddingRight: '4px', flexShrink: 0 }}>{formatCurrency(directCostTotal * (aiuPercentage/100))}</div>
+                  <div style={{ width: getColWidth('ant') + getColWidth('act') + getColWidth('acum') + getColWidth('saldo') + getColWidth('p_act') + getColWidth('p_cap') + getColWidth('p_cont') + getColWidth('p_total'), flexShrink: 0 }}></div>
+                  <div style={{ width: getColWidth('exec'), textAlign: 'right', paddingRight: '4px', flexShrink: 0 }}>{formatCurrency(grandExecutedTotal * (aiuPercentage/100))}</div>
                 </div>
               );
 
               rows.push(
-                <div key="final-contract" style={{ display: 'flex', alignItems: 'center', height: '35px', padding: '0 16px', backgroundColor: 'hsl(var(--primary-neon))', color: '#000', fontWeight: '900', fontSize: '0.9rem' }}>
-                  <div style={{ width: getColWidth('item') + getColWidth('descripcion') + getColWidth('cant_p') + getColWidth('vr_unit'), textAlign: 'right', paddingRight: '12px' }}>TOTAL CONTRATO</div>
-                  <div style={{ width: getColWidth('vr_total'), textAlign: 'right', paddingRight: '4px' }}>{formatCurrency(contractTotal)}</div>
-                  <div style={{ width: getColWidth('ant') + getColWidth('act') + getColWidth('acum') + getColWidth('saldo') + getColWidth('p_act') + getColWidth('p_cap') + getColWidth('p_cont') + getColWidth('p_total') }}></div>
-                  <div style={{ width: getColWidth('exec'), textAlign: 'right', paddingRight: '4px', whiteSpace: 'nowrap' }}>
+                <div key="final-contract" style={{ display: 'flex', alignItems: 'center', height: '35px', padding: '0 16px', backgroundColor: 'hsl(var(--primary-neon))', color: '#000', fontWeight: '900', fontSize: '0.9rem', width: '100%', minWidth: 'max-content' }}>
+                  <div style={{ width: getColWidth('item') + getColWidth('descripcion') + getColWidth('cant_p') + getColWidth('vr_unit'), textAlign: 'right', paddingRight: '12px', flexShrink: 0 }}>TOTAL CONTRATO</div>
+                  <div style={{ width: getColWidth('vr_total'), textAlign: 'right', paddingRight: '4px', flexShrink: 0 }}>{formatCurrency(contractTotal)}</div>
+                  <div style={{ width: getColWidth('ant') + getColWidth('act') + getColWidth('acum') + getColWidth('saldo') + getColWidth('p_act') + getColWidth('p_cap') + getColWidth('p_cont') + getColWidth('p_total'), flexShrink: 0 }}></div>
+                  <div style={{ width: getColWidth('exec'), textAlign: 'right', paddingRight: '4px', whiteSpace: 'nowrap', flexShrink: 0 }}>
                     {formatCurrency(totalContractExec)} <span style={{ fontSize: '0.7rem', fontWeight: 'bold', opacity: 0.7 }}>({totalProgressPercentage.toFixed(2)}%)</span>
                   </div>
                 </div>
@@ -630,5 +960,7 @@ export default function ProgressView() {
         </div>
       </div>
     </div>
+  </div>
+</div>
   );
 }

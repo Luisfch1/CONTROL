@@ -90,13 +90,11 @@ body,
 }
 
 ::selection {
-  background: hsla(var(--accent-primary), 0.3);
-  color: hsl(var(--text-primary));
+  background-color: hsl(var(--primary-neon-hsl) / 0.45) !important;
 }
 
 ::-moz-selection {
-  background: hsla(var(--accent-primary), 0.3);
-  color: hsl(var(--text-primary));
+  background-color: hsl(var(--primary-neon-hsl) / 0.45) !important;
 }
 
 #root {
@@ -168,10 +166,7 @@ textarea {
   font-family: var(--font-body);
 }
 
-::selection {
-  background-color: hsla(var(--primary-neon), 0.3);
-  color: #fff;
-}
+
 
 /* Layout Classes */
 .app-container {
@@ -725,7 +720,7 @@ img {
     display: flex !important;
     flex-direction: column !important;
     width: 210mm !important;
-    height: 279mm !important;
+    min-height: 279mm !important;
     /* Estándar Carta */
     margin: 0 !important;
     padding: 15mm !important;

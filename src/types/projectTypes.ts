@@ -87,10 +87,48 @@ export interface PhotoReport {
   photoIds: string[]; // Lista de IDs de fotos que conforman este informe
 }
 
+export interface ExecutiveReport {
+  id: string;
+  name: string;
+  createdAt: string;
+  selectedMonth: string;
+  dateFrom: string;
+  dateTo: string;
+  narrativeText: string;
+  excludedPhotoIds: string[]; // Fotos excluidas en este reporte
+  sCurveCaption?: string; // Comentario técnico debajo de la curva S
+}
+
 export interface ReportStaff {
   name: string;
   idCard: string;
   role: string;
+}
+
+export interface ReportElement {
+  id: string;
+  type: 'text' | 'artifact';
+  content?: string;
+  artifactType?: string;
+}
+
+export interface ReportSection {
+  id: string;
+  title: string;
+  visible: boolean;
+  type: string;
+  elements?: ReportElement[];
+  content?: string;
+}
+
+export interface DocxBlock {
+  id: string;
+  type: 'paragraph' | 'table' | 'widget';
+  text?: string;
+  widgetType?: 'progress-table' | 'photos' | 'curve-s' | 'staff-obra' | 'staff-interventoria' | 'contract-data' | 'committees' | 'correspondence';
+  originalXmlString?: string;
+  rows?: string[][];
+  align?: 'left' | 'center' | 'right' | 'justify';
 }
 
 export interface ReportConfig {
@@ -107,6 +145,12 @@ export interface ReportConfig {
   jornadasTrabajo?: string;
   personalObra?: ReportStaff[];
   personalInterventoria?: ReportStaff[];
+  sections?: ReportSection[];
+  docxTemplateBase64?: string;
+  docxBlocks?: DocxBlock[];
+  additionalPhotoItems?: string[];
+  executiveNarratives?: Record<string, string>; // Mapea selectedMonth (ej: '2026-05') a su narrativa técnica
+  sCurveCaptions?: Record<string, string>; // Mapea selectedMonth (ej: '2026-05') a su descripción de curva S
 }
 
 export interface Project {
@@ -132,6 +176,7 @@ export interface Project {
   logiEntries: LogiEntry[];
   reportFormats?: ReportFormat[];
   photoReports?: PhotoReport[];
+  executiveReports?: ExecutiveReport[];
   cloudConfig?: {
     provider: 'supabase' | 'firebase';
     url: string;
@@ -152,7 +197,48 @@ export interface Project {
   costTransactions?: CostTransaction[];
   apuFiles?: string[];
   reportConfig?: ReportConfig;
+  calculationMemories?: CalculationMemory[];
+  gmailConfig?: GmailConfig;
+  gmailEmails?: ImportedEmail[];
+  gmailCorrespondenceReports?: GmailCorrespondenceReport[];
+  budgetRawText?: string;
+  budgetDraft?: {
+    versionName: string;
+    items: BudgetItem[];
+  };
 }
+
+export interface GmailConfig {
+  email: string;
+  isConnected: boolean;
+  lastSync?: string;
+  addressRules?: Record<string, 'obra' | 'supervision' | 'interventoria' | 'general'>;
+}
+
+export interface ImportedEmail {
+  id: string;
+  date: string;
+  dateTime: string;
+  direction: 'inbound' | 'outbound';
+  sender: string;
+  receiver: string;
+  subject: string;
+  bodySnippet?: string;
+  category: 'obra' | 'supervision' | 'interventoria' | 'general';
+  attachmentsCount?: number;
+}
+
+export interface GmailCorrespondenceReport {
+  id: string;
+  name: string;
+  createdAt: string;
+  dateFrom?: string;
+  dateTo?: string;
+  categoryFilter?: string;
+  textFilter?: string;
+  emailIds: string[];
+}
+
 
 export interface APUResource {
   description: string;
@@ -226,4 +312,17 @@ export interface CorrespondenceFolder {
   id: string;
   name: string;
   parentId: string | null;
+}
+
+export interface CalculationMemory {
+  id: string;
+  code: string;
+  title: string;
+  description: string;
+  author: string;
+  revision: string;
+  date: string;
+  fileUrl?: string;
+  fileName?: string;
+  fileSize?: string;
 }
